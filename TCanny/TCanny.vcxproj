@@ -118,6 +118,7 @@
       <UseIntelOptimizedHeaders>true</UseIntelOptimizedHeaders>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <Cpp0xSupport>true</Cpp0xSupport>
+      <GenerateAlternateCodePaths>AVX2</GenerateAlternateCodePaths>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -138,6 +139,7 @@
       <UseIntelOptimizedHeaders>true</UseIntelOptimizedHeaders>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <Cpp0xSupport>true</Cpp0xSupport>
+      <GenerateAlternateCodePaths>AVX2</GenerateAlternateCodePaths>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
