@@ -121,7 +121,7 @@ static int getBin(const float dir, const int n) {
     return (bin >= n) ? 0 : bin;
 }
 
-static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, float * VS_RESTRICT dimg, const int width, const int height, const int stride, const int nms) {
+static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, float * VS_RESTRICT dimg, const int width, const int height, const int stride, const int nms, const int mode) {
     memset(gimg, 0, stride * height * sizeof(float));
     memset(dimg, 0, stride * height * sizeof(float));
     float * VS_RESTRICT srcpT = srcp + stride;
@@ -132,6 +132,8 @@ static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, floa
             const float dx = srcpT[x + 1] - srcpT[x - 1];
             const float dy = srcpT[x - stride] - srcpT[x + stride];
             gmnT[x] = std::sqrt(dx * dx + dy * dy);
+            if (mode == 1)
+                continue;
             const float dr = std::atan2(dy, dx);
             dirT[x] = dr + (dr < 0.f ? M_PIF : 0.f);
         }
@@ -140,7 +142,7 @@ static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, floa
         dirT += stride;
     }
     memcpy(srcp, gimg, stride * height * sizeof(float));
-    if (!nms)
+    if (mode & 1)
         return;
     const int offTable[4] = { 1, -stride + 1, -stride, -stride - 1 };
     srcpT = srcp + stride;
@@ -273,7 +275,7 @@ static void TCanny(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT
             T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
             genConvV(srcp, fa[1], width, height, stride, d->grad, d->weights, d->vi->format->bitsPerSample);
             genConvH(fa[1], fa[0], width, height, stride, d->grad, d->weights);
-            gmDirImages(fa[0], fa[1], fa[2], width, height, stride, (d->mode & 1) ? 0 : d->nms);
+            gmDirImages(fa[0], fa[1], fa[2], width, height, stride, d->nms, d->mode);
             if (!(d->mode & 1))
                 hystersis(fa[0], stack, width, height, stride, d->t_h, d->t_l);
             if (d->mode == 0)

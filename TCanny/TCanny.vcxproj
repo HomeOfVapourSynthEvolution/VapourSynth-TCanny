@@ -119,6 +119,7 @@
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <Cpp0xSupport>true</Cpp0xSupport>
       <GenerateAlternateCodePaths>AVX2</GenerateAlternateCodePaths>
+      <AdditionalOptions>/Qvec-threshold0 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -140,6 +141,7 @@
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <Cpp0xSupport>true</Cpp0xSupport>
       <GenerateAlternateCodePaths>AVX2</GenerateAlternateCodePaths>
+      <AdditionalOptions>/Qvec-threshold0 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
