@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cmath>
 #include <vapoursynth/VapourSynth.h>
 #include <vapoursynth/VSHelper.h>
 
