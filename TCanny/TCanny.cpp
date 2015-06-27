@@ -225,6 +225,16 @@ static void hystersis(float * VS_RESTRICT srcp, Stack & VS_RESTRICT stack, const
 }
 
 template<typename T>
+static void outputGB(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int peak) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++)
+            dstp[x] = std::min(std::max(static_cast<int>(srcp[x] + 0.5f), 0), peak);
+        srcp += stride;
+        dstp += stride;
+    }
+}
+
+template<typename T>
 static void binarizeCE(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const float t_h, const T peak) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
@@ -277,12 +287,16 @@ static void TCanny(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT
 
             genConvV<T>(srcp, fa[1], width, height, stride, d->grad, d->weights);
             genConvH(fa[1], fa[0], width, height, stride, d->grad, d->weights);
-            gmDirImages(fa[0], fa[1], fa[2], width, height, stride, d->nms, d->mode, d->op);
+
+            if (d->mode != -1)
+                gmDirImages(fa[0], fa[1], fa[2], width, height, stride, d->nms, d->mode, d->op);
 
             if (!(d->mode & 1))
                 hystersis(fa[0], stack, width, height, stride, d->t_h, d->t_l);
 
-            if (d->mode == 0)
+            if (d->mode == -1)
+                outputGB<T>(fa[0], dstp, width, height, stride, d->peak);
+            else if (d->mode == 0)
                 binarizeCE<T>(fa[0], dstp, width, height, stride, d->t_h, d->peak);
             else if (d->mode == 1)
                 discretizeGM<T>(fa[1], dstp, width, height, stride, d->magnitude, d->peak);
@@ -388,8 +402,8 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         vsapi->setError(out, "TCanny: nms must be set to 0, 1, 2 or 3");
         return;
     }
-    if (d.mode < 0 || d.mode > 3) {
-        vsapi->setError(out, "TCanny: mode must be set to 0, 1, 2 or 3");
+    if (d.mode < -1 || d.mode > 3) {
+        vsapi->setError(out, "TCanny: mode must be set to -1, 0, 1, 2 or 3");
         return;
     }
     if (d.op < 0 || d.op > 2) {
