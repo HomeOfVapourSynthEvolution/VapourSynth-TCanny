@@ -57,6 +57,10 @@ static inline std::pair<int, int> pop(Stack & s) {
     return s.pos[s.index--];
 }
 
+static inline float scale(const float val, const int bits) {
+    return val * ((1 << bits) - 1) / 255.f;
+}
+
 static float * gaussianWeights(const float sigma, int & rad) {
     const int dia = std::max(static_cast<int>(sigma * 3.f + 0.5f), 1) * 2 + 1;
     rad = dia / 2;
@@ -570,9 +574,8 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     }
 
     if (d.vi->format->sampleType == stInteger) {
-        const float scale = static_cast<float>(1 << (d.vi->format->bitsPerSample - 8));
-        d.t_h *= scale;
-        d.t_l *= scale;
+        d.t_h = scale(d.t_h, d.vi->format->bitsPerSample);
+        d.t_l = scale(d.t_l, d.vi->format->bitsPerSample);
         d.bins = 1 << d.vi->format->bitsPerSample;
         d.peak = d.bins - 1;
     } else {
