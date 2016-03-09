@@ -27,6 +27,7 @@
 #include <vapoursynth/VSHelper.h>
 
 #define M_PIF 3.14159265358979323846f
+#define M_1_PIF 0.318309886183790671538f
 
 struct TCannyData {
     VSNodeRef * node;
@@ -47,57 +48,67 @@ struct Stack {
     int index;
 };
 
-static void push(Stack & s, const int x, const int y) {
+static inline void push(Stack & s, const int x, const int y) {
     s.pos[++s.index].first = x;
     s.pos[s.index].second = y;
 }
 
-static std::pair<int, int> pop(Stack & s) {
+static inline std::pair<int, int> pop(Stack & s) {
     return s.pos[s.index--];
 }
 
 static float * gaussianWeights(const float sigma, int & rad) {
     const int dia = std::max(static_cast<int>(sigma * 3.f + 0.5f), 1) * 2 + 1;
-    rad = dia >> 1;
-    float * weights = vs_aligned_malloc<float>(dia * sizeof(float), 32);
+    rad = dia / 2;
+    float sum = 0.f;
+
+    float * VS_RESTRICT weights = vs_aligned_malloc<float>(dia * sizeof(float), 32);
     if (!weights)
         return nullptr;
-    float sum = 0.f;
+
     for (int k = -rad; k <= rad; k++) {
         const float w = std::exp(-(k * k) / (2.f * sigma * sigma));
         weights[k + rad] = w;
         sum += w;
     }
+
     for (int k = 0; k < dia; k++)
         weights[k] /= sum;
+
     return weights;
 }
 
 template<typename T>
-static void genConvV(const T * srcp, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int rad, const float * weights, const float offset) {
+static void genConvV(const T * srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
     weights += rad;
+
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             float sum = 0.f;
+
             for (int v = -rad; v <= rad; v++) {
                 int yc = y + v;
                 if (yc < 0)
                     yc = -yc;
                 else if (yc >= height)
                     yc = 2 * (height - 1) - yc;
-                sum += (srcp[x + yc * stride] + offset) * weights[v];
+                sum += (srcp[x + stride * yc] + offset) * weights[v];
             }
+
             dstp[x] = sum;
         }
+
         dstp += stride;
     }
 }
 
-static void genConvH(const float * srcp, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int rad, const float * weights) {
+static void genConvH(const float * srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad) {
     weights += rad;
+
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             float sum = 0.f;
+
             for (int v = -rad; v <= rad; v++) {
                 int xc = x + v;
                 if (xc < 0)
@@ -106,8 +117,10 @@ static void genConvH(const float * srcp, float * VS_RESTRICT dstp, const int wid
                     xc = 2 * (width - 1) - xc;
                 sum += srcp[xc] * weights[v];
             }
+
             dstp[x] = sum;
         }
+
         srcp += stride;
         dstp += stride;
     }
@@ -115,13 +128,13 @@ static void genConvH(const float * srcp, float * VS_RESTRICT dstp, const int wid
 
 template<typename T>
 static T getBin(const float dir, const int n) {
-    const int bin = static_cast<int>(dir * (n / M_PIF) + 0.5f);
+    const int bin = static_cast<int>(dir * (n * M_1_PIF) + 0.5f);
     return (bin >= n) ? 0 : bin;
 }
 
 template<>
 float getBin<float>(const float dir, const int n) {
-    const float bin = dir * (n / M_PIF);
+    const float bin = dir * (n * M_1_PIF);
     return (bin > static_cast<float>(n)) ? 0.f : bin;
 }
 
@@ -129,72 +142,86 @@ static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, floa
                         const int nms, const int mode, const int op) {
     memset(gimg, 0, stride * height * sizeof(float));
     memset(dimg, 0, stride * height * sizeof(float));
+
     float * VS_RESTRICT srcpT = srcp + stride;
     float * VS_RESTRICT gmnT = gimg + stride;
     float * VS_RESTRICT dirT = dimg + stride;
+
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             float dx, dy;
+
             if (op == 0) {
                 dx = srcpT[x + 1] - srcpT[x - 1];
                 dy = srcpT[x - stride] - srcpT[x + stride];
             } else if (op == 1) {
-                dx = (srcpT[x - stride + 1] + srcpT[x + 1] + srcpT[x + stride + 1] - srcpT[x - stride - 1] - srcpT[x - 1] - srcpT[x + stride - 1]) / 2.f;
-                dy = (srcpT[x - stride - 1] + srcpT[x - stride] + srcpT[x - stride + 1] - srcpT[x + stride - 1] - srcpT[x + stride] - srcpT[x + stride + 1]) / 2.f;
+                dx = (srcpT[x - stride + 1] + srcpT[x + 1] + srcpT[x + stride + 1] - srcpT[x - stride - 1] - srcpT[x - 1] - srcpT[x + stride - 1]) * 0.5f;
+                dy = (srcpT[x - stride - 1] + srcpT[x - stride] + srcpT[x - stride + 1] - srcpT[x + stride - 1] - srcpT[x + stride] - srcpT[x + stride + 1]) * 0.5f;
             } else {
                 dx = srcpT[x - stride + 1] + 2.f * srcpT[x + 1] + srcpT[x + stride + 1] - srcpT[x - stride - 1] - 2.f * srcpT[x - 1] - srcpT[x + stride - 1];
                 dy = srcpT[x - stride - 1] + 2.f * srcpT[x - stride] + srcpT[x - stride + 1] - srcpT[x + stride - 1] - 2.f * srcpT[x + stride] - srcpT[x + stride + 1];
             }
+
             gmnT[x] = std::sqrt(dx * dx + dy * dy);
-            if (mode == 1)
-                continue;
-            const float dr = std::atan2(dy, dx);
-            dirT[x] = dr + (dr < 0.f ? M_PIF : 0.f);
+
+            if (mode != 1) {
+                const float dr = std::atan2(dy, dx);
+                dirT[x] = dr + (dr < 0.f ? M_PIF : 0.f);
+            }
         }
+
         srcpT += stride;
         gmnT += stride;
         dirT += stride;
     }
+
     memcpy(srcp, gimg, stride * height * sizeof(float));
-    if (mode & 1)
+
+    if ((mode & 1) || nms == 0)
         return;
+
     const int offTable[4] = { 1, -stride + 1, -stride, -stride - 1 };
     srcpT = srcp + stride;
     gmnT = gimg + stride;
     dirT = dimg + stride;
+
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
-            const float dir = dirT[x];
             if (nms & 1) {
-                const int off = offTable[getBin<int>(dir, 4)];
+                const int off = offTable[getBin<int>(dirT[x], 4)];
                 if (gmnT[x] >= std::max(gmnT[x + off], gmnT[x - off]))
                     continue;
             }
+
             if (nms & 2) {
-                const int c = static_cast<int>(dir * (4.f / M_PIF));
+                const int c = static_cast<int>(dirT[x] * (4.f * M_1_PIF));
                 float val1, val2;
+
                 if (c == 0 || c >= 4) {
-                    const float h = std::tan(dir);
+                    const float h = std::tan(dirT[x]);
                     val1 = (1.f - h) * gmnT[x + 1] + h * gmnT[x - stride + 1];
                     val2 = (1.f - h) * gmnT[x - 1] + h * gmnT[x + stride - 1];
                 } else if (c == 1) {
-                    const float w = 1.f / std::tan(dir);
+                    const float w = 1.f / std::tan(dirT[x]);
                     val1 = (1.f - w) * gmnT[x - stride] + w * gmnT[x - stride + 1];
                     val2 = (1.f - w) * gmnT[x + stride] + w * gmnT[x + stride - 1];
                 } else if (c == 2) {
-                    const float w = 1.f / std::tan(M_PIF - dir);
+                    const float w = 1.f / std::tan(M_PIF - dirT[x]);
                     val1 = (1.f - w) * gmnT[x - stride] + w * gmnT[x - stride - 1];
                     val2 = (1.f - w) * gmnT[x + stride] + w * gmnT[x + stride + 1];
                 } else {
-                    const float h = std::tan(M_PIF - dir);
+                    const float h = std::tan(M_PIF - dirT[x]);
                     val1 = (1.f - h) * gmnT[x - 1] + h * gmnT[x - stride - 1];
                     val2 = (1.f - h) * gmnT[x + 1] + h * gmnT[x + stride + 1];
                 }
+
                 if (gmnT[x] >= std::max(val1, val2))
                     continue;
             }
+
             srcpT[x] = -FLT_MAX;
         }
+
         srcpT += stride;
         gmnT += stride;
         dirT += stride;
@@ -204,24 +231,28 @@ static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, floa
 static void hystersis(float * VS_RESTRICT srcp, Stack & VS_RESTRICT stack, const int width, const int height, const int stride, const float t_h, const float t_l) {
     memset(stack.map, 0, width * height);
     stack.index = -1;
+
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
-            if (srcp[x + y * stride] < t_h || stack.map[x + y * width])
+            if (srcp[x + stride * y] < t_h || stack.map[x + width * y])
                 continue;
-            srcp[x + y * stride] = FLT_MAX;
-            stack.map[x + y * width] = UINT8_MAX;
+
+            srcp[x + stride * y] = FLT_MAX;
+            stack.map[x + width * y] = UINT8_MAX;
             push(stack, x, y);
+
             while (stack.index > -1) {
                 const std::pair<int, int> pos = pop(stack);
                 const int xMin = (pos.first > 1) ? pos.first - 1 : 1;
                 const int xMax = (pos.first < width - 2) ? pos.first + 1 : pos.first;
                 const int yMin = (pos.second > 1) ? pos.second - 1 : 1;
                 const int yMax = (pos.second < height - 2) ? pos.second + 1 : pos.second;
+
                 for (int yy = yMin; yy <= yMax; yy++) {
                     for (int xx = xMin; xx <= xMax; xx++) {
-                        if (srcp[xx + yy * stride] > t_l && !stack.map[xx + yy * width]) {
-                            srcp[xx + yy * stride] = FLT_MAX;
-                            stack.map[xx + yy * width] = UINT8_MAX;
+                        if (srcp[xx + stride * yy] > t_l && !stack.map[xx + width * yy]) {
+                            srcp[xx + stride * yy] = FLT_MAX;
+                            stack.map[xx + width * yy] = UINT8_MAX;
                             push(stack, xx, yy);
                         }
                     }
@@ -237,6 +268,7 @@ static void outputGB(const float * srcp, T * VS_RESTRICT dstp, const int width, 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(std::max(static_cast<int>(srcp[x] + 0.5f), 0), peak);
+
         srcp += stride;
         dstp += stride;
     }
@@ -248,6 +280,7 @@ void outputGB<float>(const float * srcp, float * VS_RESTRICT dstp, const int wid
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(std::max(srcp[x] - offset, lower), upper);
+
         srcp += stride;
         dstp += stride;
     }
@@ -258,6 +291,7 @@ static void binarizeCE(const float * srcp, T * VS_RESTRICT dstp, const int width
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (srcp[x] >= t_h) ? peak : 0;
+
         srcp += stride;
         dstp += stride;
     }
@@ -269,6 +303,7 @@ void binarizeCE<float>(const float * srcp, float * VS_RESTRICT dstp, const int w
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (srcp[x] >= t_h) ? upper : lower;
+
         srcp += stride;
         dstp += stride;
     }
@@ -280,6 +315,7 @@ static void discretizeGM(const float * gimg, T * VS_RESTRICT dstp, const int wid
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(static_cast<int>(gimg[x] * magnitude + 0.5f), peak);
+
         gimg += stride;
         dstp += stride;
     }
@@ -291,6 +327,7 @@ void discretizeGM<float>(const float * gimg, float * VS_RESTRICT dstp, const int
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(gimg[x] * magnitude - offset, upper);
+
         gimg += stride;
         dstp += stride;
     }
@@ -302,6 +339,7 @@ static void discretizeDM_T(const float * srcp, const float * dimg, T * VS_RESTRI
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (srcp[x] >= t_h) ? getBin<T>(dimg[x], bins) : 0;
+
         srcp += stride;
         dimg += stride;
         dstp += stride;
@@ -314,6 +352,7 @@ void discretizeDM_T<float>(const float * srcp, const float * dimg, float * VS_RE
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (srcp[x] >= t_h) ? getBin<float>(dimg[x], bins) - offset : lower;
+
         srcp += stride;
         dimg += stride;
         dstp += stride;
@@ -325,6 +364,7 @@ static void discretizeDM(const float * dimg, T * VS_RESTRICT dstp, const int wid
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = getBin<T>(dimg[x], bins);
+
         dimg += stride;
         dstp += stride;
     }
@@ -335,13 +375,14 @@ void discretizeDM<float>(const float * dimg, float * VS_RESTRICT dstp, const int
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = getBin<float>(dimg[x], bins) - offset;
+
         dimg += stride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void TCanny(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT fa[3], Stack & VS_RESTRICT stack, const TCannyData * d, const VSAPI * vsapi) {
+static void process(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT fa[3], Stack & VS_RESTRICT stack, const TCannyData * d, const VSAPI * vsapi) {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const int width = vsapi->getFrameWidth(src, plane);
@@ -351,8 +392,8 @@ static void TCanny(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT
             T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
             const float offset = (d->vi->format->sampleType == stInteger || plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.f : 0.5f;
 
-            genConvV<T>(srcp, fa[1], width, height, stride, d->grad, d->weights, offset);
-            genConvH(fa[1], fa[0], width, height, stride, d->grad, d->weights);
+            genConvV<T>(srcp, fa[1], d->weights, width, height, stride, d->grad, offset);
+            genConvH(fa[1], fa[0], d->weights, width, height, stride, d->grad);
 
             if (d->mode != -1)
                 gmDirImages(fa[0], fa[1], fa[2], width, height, stride, d->nms, d->mode, d->op);
@@ -415,11 +456,11 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
         if (d->vi->format->sampleType == stInteger) {
             if (d->vi->format->bitsPerSample == 8)
-                TCanny<uint8_t>(src, dst, fa, stack, d, vsapi);
+                process<uint8_t>(src, dst, fa, stack, d, vsapi);
             else
-                TCanny<uint16_t>(src, dst, fa, stack, d, vsapi);
+                process<uint16_t>(src, dst, fa, stack, d, vsapi);
         } else {
-            TCanny<float>(src, dst, fa, stack, d, vsapi);
+            process<float>(src, dst, fa, stack, d, vsapi);
         }
 
         vsapi->freeFrame(src);
@@ -447,19 +488,25 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     d.sigma = static_cast<float>(vsapi->propGetFloat(in, "sigma", 0, &err));
     if (err)
         d.sigma = 1.5f;
+
     d.t_h = static_cast<float>(vsapi->propGetFloat(in, "t_h", 0, &err));
     if (err)
         d.t_h = 8.f;
+
     d.t_l = static_cast<float>(vsapi->propGetFloat(in, "t_l", 0, &err));
     if (err)
         d.t_l = 1.f;
+
     d.nms = int64ToIntS(vsapi->propGetInt(in, "nms", 0, &err));
     if (err)
         d.nms = 3;
+
     d.mode = int64ToIntS(vsapi->propGetInt(in, "mode", 0, &err));
+
     d.op = int64ToIntS(vsapi->propGetInt(in, "op", 0, &err));
     if (err)
         d.op = 1;
+
     d.gmmax = static_cast<float>(vsapi->propGetFloat(in, "gmmax", 0, &err));
     if (err)
         d.gmmax = 50.f;
@@ -468,18 +515,22 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         vsapi->setError(out, "TCanny: sigma must be greater than 0.0");
         return;
     }
+
     if (d.nms < 0 || d.nms > 3) {
-        vsapi->setError(out, "TCanny: nms must be set to 0, 1, 2 or 3");
+        vsapi->setError(out, "TCanny: nms must be 0, 1, 2 or 3");
         return;
     }
+
     if (d.mode < -1 || d.mode > 3) {
-        vsapi->setError(out, "TCanny: mode must be set to -1, 0, 1, 2 or 3");
+        vsapi->setError(out, "TCanny: mode must be -1, 0, 1, 2 or 3");
         return;
     }
+
     if (d.op < 0 || d.op > 2) {
-        vsapi->setError(out, "TCanny: op must be set to 0, 1 or 2");
+        vsapi->setError(out, "TCanny: op must be 0, 1 or 2");
         return;
     }
+
     if (d.gmmax < 1.f) {
         vsapi->setError(out, "TCanny: gmmax must be greater than or equal to 1.0");
         return;
@@ -561,5 +612,15 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
     configFunc("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VAPOURSYNTH_API_VERSION, 1, plugin);
-    registerFunc("TCanny", "clip:clip;sigma:float:opt;t_h:float:opt;t_l:float:opt;nms:int:opt;mode:int:opt;op:int:opt;gmmax:float:opt;planes:int[]:opt;", tcannyCreate, nullptr, plugin);
+    registerFunc("TCanny",
+                 "clip:clip;"
+                 "sigma:float:opt;"
+                 "t_h:float:opt;"
+                 "t_l:float:opt;"
+                 "nms:int:opt;"
+                 "mode:int:opt;"
+                 "op:int:opt;"
+                 "gmmax:float:opt;"
+                 "planes:int[]:opt;",
+                 tcannyCreate, nullptr, plugin);
 }
