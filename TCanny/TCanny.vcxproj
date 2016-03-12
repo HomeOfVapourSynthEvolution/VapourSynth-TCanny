@@ -50,13 +50,12 @@
     <ClCompile>
       <PrecompiledHeader>
       </PrecompiledHeader>
-      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VS_TARGET_CPU_X86;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>MaxSpeedHighLevel</Optimization>
       <UseIntelOptimizedHeaders>true</UseIntelOptimizedHeaders>
       <EnableAnsiAliasing>true</EnableAnsiAliasing>
       <AdditionalOptions>/Qstd=c++14 %(AdditionalOptions)</AdditionalOptions>
-      <GenerateAlternateCodePaths>AVX2</GenerateAlternateCodePaths>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -69,13 +68,12 @@
     <ClCompile>
       <PrecompiledHeader>
       </PrecompiledHeader>
-      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VS_TARGET_CPU_X86;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>MaxSpeedHighLevel</Optimization>
       <UseIntelOptimizedHeaders>true</UseIntelOptimizedHeaders>
       <EnableAnsiAliasing>true</EnableAnsiAliasing>
       <AdditionalOptions>/Qstd=c++14 %(AdditionalOptions)</AdditionalOptions>
-      <GenerateAlternateCodePaths>AVX2</GenerateAlternateCodePaths>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

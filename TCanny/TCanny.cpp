@@ -23,8 +23,12 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 #include <vapoursynth/VapourSynth.h>
 #include <vapoursynth/VSHelper.h>
+#ifdef VS_TARGET_CPU_X86
+#include "vectorclass/vectormath_trig.h"
+#endif
 
 #define M_PIF 3.14159265358979323846f
 #define M_1_PIF 0.318309886183790671538f
@@ -40,6 +44,7 @@ struct TCannyData {
     float magnitude;
     int peak;
     float lower[3], upper[3];
+    void (*genConvV)(const uint8_t * srcp, float * dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset);
 };
 
 struct Stack {
@@ -66,7 +71,7 @@ static float * gaussianWeights(const float sigma, int & rad) {
     rad = dia / 2;
     float sum = 0.f;
 
-    float * VS_RESTRICT weights = vs_aligned_malloc<float>(dia * sizeof(float), 32);
+    float * VS_RESTRICT weights = new (std::nothrow) float[dia];
     if (!weights)
         return nullptr;
 
@@ -82,53 +87,351 @@ static float * gaussianWeights(const float sigma, int & rad) {
     return weights;
 }
 
-template<typename T>
-static void genConvV(const T * srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
-    weights += rad;
+#ifdef VS_TARGET_CPU_X86
+static void genConvV_uint8(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float offset) {
+    const int length = rad * 2 + 1;
+    const uint8_t ** _srcp = new const uint8_t *[length];
+    const Vec8f zero(0.f);
+
+    for (int i = -rad; i <= rad; i++)
+        _srcp[i + rad] = __srcp + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
+        for (int x = 0; x < width; x += 8) {
+            Vec8f sum = zero;
 
-            for (int v = -rad; v <= rad; v++) {
-                int yc = y + v;
-                if (yc < 0)
-                    yc = -yc;
-                else if (yc >= height)
-                    yc = 2 * (height - 1) - yc;
-                sum += (srcp[x + stride * yc] + offset) * weights[v];
+            for (int i = 0; i < length; i++) {
+                const Vec16uc srcp_16uc = Vec16uc().load(_srcp[i] + x);
+                const Vec8s srcp_8s = Vec8s(extend_low(srcp_16uc));
+                const Vec8i srcp_8i = Vec8i(extend_low(srcp_8s), extend_high(srcp_8s));
+                const Vec8f srcp = to_float(srcp_8i);
+                const Vec8f weights(_weights[i]);
+                sum = mul_add(srcp, weights, sum);
             }
 
-            dstp[x] = sum;
+            sum.store_a(dstp + x);
         }
 
+        for (int i = 0; i < length - 1; i++)
+            _srcp[i] = _srcp[i + 1];
+
+        _srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
         dstp += stride;
     }
+
+    delete[] _srcp;
 }
 
-static void genConvH(const float * srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad) {
-    weights += rad;
+static void genConvV_uint16(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float offset) {
+    const int length = rad * 2 + 1;
+    const uint16_t ** _srcp = new const uint16_t *[length];
+    const Vec8f zero(0.f);
+
+    for (int i = -rad; i <= rad; i++)
+        _srcp[i + rad] = reinterpret_cast<const uint16_t *>(__srcp) + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
+        for (int x = 0; x < width; x += 8) {
+            Vec8f sum = zero;
 
-            for (int v = -rad; v <= rad; v++) {
-                int xc = x + v;
-                if (xc < 0)
-                    xc = -xc;
-                else if (xc >= width)
-                    xc = 2 * (width - 1) - xc;
-                sum += srcp[xc] * weights[v];
+            for (int i = 0; i < length; i++) {
+                const Vec8us srcp_8us = Vec8us().load_a(_srcp[i] + x);
+                const Vec8i srcp_8i = Vec8i(extend_low(srcp_8us), extend_high(srcp_8us));
+                const Vec8f srcp = to_float(srcp_8i);
+                const Vec8f weights(_weights[i]);
+                sum = mul_add(srcp, weights, sum);
             }
 
-            dstp[x] = sum;
+            sum.store_a(dstp + x);
+        }
+
+        for (int i = 0; i < length - 1; i++)
+            _srcp[i] = _srcp[i + 1];
+
+        _srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        dstp += stride;
+    }
+
+    delete[] _srcp;
+}
+
+static void genConvV_float(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float _offset) {
+    const int length = rad * 2 + 1;
+    const float ** _srcp = new const float *[length];
+    const Vec8f zero(0.f);
+    const Vec8f offset(_offset);
+
+    for (int i = -rad; i <= rad; i++)
+        _srcp[i + rad] = reinterpret_cast<const float *>(__srcp) + stride * std::abs(i);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 8) {
+            Vec8f sum = zero;
+
+            for (int i = 0; i < length; i++) {
+                const Vec8f srcp = Vec8f().load_a(_srcp[i] + x);
+                const Vec8f weights(_weights[i]);
+                sum = mul_add((srcp + offset), weights, sum);
+            }
+
+            sum.store_a(dstp + x);
+        }
+
+        for (int i = 0; i < length - 1; i++)
+            _srcp[i] = _srcp[i + 1];
+
+        _srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        dstp += stride;
+    }
+
+    delete[] _srcp;
+}
+
+static void genConvH(const float * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad) {
+    float * VS_RESTRICT _srcp = new float[stride + rad * 2];
+    float * srcpSaved = _srcp;
+    _srcp += rad;
+    const Vec8f zero(0.f);
+
+    for (int y = 0; y < height; y++) {
+        memcpy(_srcp, __srcp, width * sizeof(float));
+        for (int i = 1; i <= rad; i++) {
+            _srcp[-i] = __srcp[i];
+            _srcp[width - 1 + i] = __srcp[width - 1 - i];
+        }
+
+        for (int x = 0; x < width; x += 8) {
+            Vec8f sum = zero;
+
+            for (int i = -rad; i <= rad; i++) {
+                const Vec8f srcp = Vec8f().load(_srcp + x + i);
+                const Vec8f weights(_weights[i + rad]);
+                sum = mul_add(srcp, weights, sum);
+            }
+
+            sum.store_a(dstp + x);
+        }
+
+        __srcp += stride;
+        dstp += stride;
+    }
+
+    delete[] srcpSaved;
+}
+
+static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const int mode, const int op) {
+    const int regularPart = (width % 8 ? width : width - 1) & -8;
+    const Vec8f zero(0.f);
+    const Vec8f pointFive(0.5f);
+    const Vec8f two(2.f);
+    const Vec8f PI(M_PIF);
+
+    memset(_gimg, 0, stride * height * sizeof(float));
+    memset(_dimg, 0, stride * height * sizeof(float));
+
+    float * VS_RESTRICT srcp = _srcp + stride;
+    float * VS_RESTRICT gimg = _gimg + stride;
+    float * VS_RESTRICT dimg = _dimg + stride;
+
+    for (int y = 1; y < height - 1; y++) {
+        int x;
+
+        for (x = 1; x < regularPart; x += 8) {
+            Vec8f dx, dy;
+
+            if (op == 0) {
+                dx = Vec8f().load(srcp + x + 1) - Vec8f().load_a(srcp + x - 1);
+                dy = Vec8f().load(srcp + x - stride) - Vec8f().load(srcp + x + stride);
+            } else if (op == 1) {
+                dx = (Vec8f().load(srcp + x - stride + 1) + Vec8f().load(srcp + x + 1) + Vec8f().load(srcp + x + stride + 1)
+                    - Vec8f().load_a(srcp + x - stride - 1) - Vec8f().load_a(srcp + x - 1) - Vec8f().load_a(srcp + x + stride - 1)) * pointFive;
+                dy = (Vec8f().load_a(srcp + x - stride - 1) + Vec8f().load(srcp + x - stride) + Vec8f().load(srcp + x - stride + 1)
+                    - Vec8f().load_a(srcp + x + stride - 1) - Vec8f().load(srcp + x + stride) - Vec8f().load(srcp + x + stride + 1)) * pointFive;
+            } else {
+                dx = Vec8f().load(srcp + x - stride + 1) + mul_add(two, Vec8f().load(srcp + x + 1), Vec8f().load(srcp + x + stride + 1))
+                    - Vec8f().load_a(srcp + x - stride - 1) - mul_sub(two, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcp + x + stride - 1));
+                dy = Vec8f().load_a(srcp + x - stride - 1) + mul_add(two, Vec8f().load(srcp + x - stride), Vec8f().load(srcp + x - stride + 1))
+                    - Vec8f().load_a(srcp + x + stride - 1) - mul_sub(two, Vec8f().load(srcp + x + stride), Vec8f().load(srcp + x + stride + 1));
+            }
+
+            sqrt(mul_add(dx, dx, dy * dy)).store(gimg + x);
+
+            if (mode != 1) {
+                const Vec8f dr = atan2(dy, dx);
+                (dr + select(dr < zero, PI, zero)).store(dimg + x);
+            }
+        }
+
+        for (; x < width - 1; x++) {
+            float dx, dy;
+
+            if (op == 0) {
+                dx = srcp[x + 1] - srcp[x - 1];
+                dy = srcp[x - stride] - srcp[x + stride];
+            } else if (op == 1) {
+                dx = (srcp[x - stride + 1] + srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - srcp[x - 1] - srcp[x + stride - 1]) * 0.5f;
+                dy = (srcp[x - stride - 1] + srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - srcp[x + stride] - srcp[x + stride + 1]) * 0.5f;
+            } else {
+                dx = srcp[x - stride + 1] + 2.f * srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - 2.f * srcp[x - 1] - srcp[x + stride - 1];
+                dy = srcp[x - stride - 1] + 2.f * srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - 2.f * srcp[x + stride] - srcp[x + stride + 1];
+            }
+
+            gimg[x] = std::sqrt(dx * dx + dy * dy);
+
+            if (mode != 1) {
+                const float dr = std::atan2(dy, dx);
+                dimg[x] = dr + (dr < 0.f ? M_PIF : 0.f);
+            }
         }
 
         srcp += stride;
+        gimg += stride;
+        dimg += stride;
+    }
+
+    memcpy(_srcp, _gimg, stride * height * sizeof(float));
+}
+#else
+static void genConvV_uint8(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
+    const int length = rad * 2 + 1;
+    const uint8_t ** srcp = new const uint8_t *[length];
+
+    for (int i = -rad; i <= rad; i++)
+        srcp[i + rad] = _srcp + stride * std::abs(i);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float sum = 0.f;
+            for (int i = 0; i < length; i++)
+                sum += srcp[i][x] * weights[i];
+            dstp[x] = sum;
+        }
+
+        for (int i = 0; i < length - 1; i++)
+            srcp[i] = srcp[i + 1];
+
+        srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
         dstp += stride;
     }
+
+    delete[] srcp;
 }
+
+static void genConvV_uint16(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
+    const int length = rad * 2 + 1;
+    const uint16_t ** srcp = new const uint16_t *[length];
+
+    for (int i = -rad; i <= rad; i++)
+        srcp[i + rad] = reinterpret_cast<const uint16_t *>(_srcp) + stride * std::abs(i);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float sum = 0.f;
+            for (int i = 0; i < length; i++)
+                sum += srcp[i][x] * weights[i];
+            dstp[x] = sum;
+        }
+
+        for (int i = 0; i < length - 1; i++)
+            srcp[i] = srcp[i + 1];
+
+        srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        dstp += stride;
+    }
+
+    delete[] srcp;
+}
+
+static void genConvV_float(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
+    const int length = rad * 2 + 1;
+    const float ** srcp = new const float *[length];
+
+    for (int i = -rad; i <= rad; i++)
+        srcp[i + rad] = reinterpret_cast<const float *>(_srcp) + stride * std::abs(i);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            float sum = 0.f;
+            for (int i = 0; i < length; i++)
+                sum += (srcp[i][x] + offset) * weights[i];
+            dstp[x] = sum;
+        }
+
+        for (int i = 0; i < length - 1; i++)
+            srcp[i] = srcp[i + 1];
+
+        srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        dstp += stride;
+    }
+
+    delete[] srcp;
+}
+
+static void genConvH(const float * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad) {
+    float * VS_RESTRICT srcp = new float[stride + rad * 2];
+    float * srcpSaved = srcp;
+    srcp += rad;
+
+    for (int y = 0; y < height; y++) {
+        memcpy(srcp, _srcp, width * sizeof(float));
+        for (int i = 1; i <= rad; i++) {
+            srcp[-i] = _srcp[i];
+            srcp[width - 1 + i] = _srcp[width - 1 - i];
+        }
+
+        for (int x = 0; x < width; x++) {
+            float sum = 0.f;
+            for (int i = -rad; i <= rad; i++)
+                sum += srcp[x + i] * weights[i + rad];
+            dstp[x] = sum;
+        }
+
+        _srcp += stride;
+        dstp += stride;
+    }
+
+    delete[] srcpSaved;
+}
+
+static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const int mode, const int op) {
+    memset(_gimg, 0, stride * height * sizeof(float));
+    memset(_dimg, 0, stride * height * sizeof(float));
+
+    float * VS_RESTRICT srcp = _srcp + stride;
+    float * VS_RESTRICT gimg = _gimg + stride;
+    float * VS_RESTRICT dimg = _dimg + stride;
+
+    for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+            float dx, dy;
+
+            if (op == 0) {
+                dx = srcp[x + 1] - srcp[x - 1];
+                dy = srcp[x - stride] - srcp[x + stride];
+            } else if (op == 1) {
+                dx = (srcp[x - stride + 1] + srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - srcp[x - 1] - srcp[x + stride - 1]) * 0.5f;
+                dy = (srcp[x - stride - 1] + srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - srcp[x + stride] - srcp[x + stride + 1]) * 0.5f;
+            } else {
+                dx = srcp[x - stride + 1] + 2.f * srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - 2.f * srcp[x - 1] - srcp[x + stride - 1];
+                dy = srcp[x - stride - 1] + 2.f * srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - 2.f * srcp[x + stride] - srcp[x + stride + 1];
+            }
+
+            gimg[x] = std::sqrt(dx * dx + dy * dy);
+
+            if (mode != 1) {
+                const float dr = std::atan2(dy, dx);
+                dimg[x] = dr + (dr < 0.f ? M_PIF : 0.f);
+            }
+        }
+
+        srcp += stride;
+        gimg += stride;
+        dimg += stride;
+    }
+
+    memcpy(_srcp, _gimg, stride * height * sizeof(float));
+}
+#endif
 
 template<typename T>
 static T getBin(const float dir, const int n) {
@@ -142,93 +445,52 @@ float getBin<float>(const float dir, const int n) {
     return (bin > static_cast<float>(n)) ? 0.f : bin;
 }
 
-static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, float * VS_RESTRICT dimg, const int width, const int height, const int stride,
-                        const int nms, const int mode, const int op) {
-    memset(gimg, 0, stride * height * sizeof(float));
-    memset(dimg, 0, stride * height * sizeof(float));
-
-    float * VS_RESTRICT srcpT = srcp + stride;
-    float * VS_RESTRICT gmnT = gimg + stride;
-    float * VS_RESTRICT dirT = dimg + stride;
-
-    for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
-            float dx, dy;
-
-            if (op == 0) {
-                dx = srcpT[x + 1] - srcpT[x - 1];
-                dy = srcpT[x - stride] - srcpT[x + stride];
-            } else if (op == 1) {
-                dx = (srcpT[x - stride + 1] + srcpT[x + 1] + srcpT[x + stride + 1] - srcpT[x - stride - 1] - srcpT[x - 1] - srcpT[x + stride - 1]) * 0.5f;
-                dy = (srcpT[x - stride - 1] + srcpT[x - stride] + srcpT[x - stride + 1] - srcpT[x + stride - 1] - srcpT[x + stride] - srcpT[x + stride + 1]) * 0.5f;
-            } else {
-                dx = srcpT[x - stride + 1] + 2.f * srcpT[x + 1] + srcpT[x + stride + 1] - srcpT[x - stride - 1] - 2.f * srcpT[x - 1] - srcpT[x + stride - 1];
-                dy = srcpT[x - stride - 1] + 2.f * srcpT[x - stride] + srcpT[x - stride + 1] - srcpT[x + stride - 1] - 2.f * srcpT[x + stride] - srcpT[x + stride + 1];
-            }
-
-            gmnT[x] = std::sqrt(dx * dx + dy * dy);
-
-            if (mode != 1) {
-                const float dr = std::atan2(dy, dx);
-                dirT[x] = dr + (dr < 0.f ? M_PIF : 0.f);
-            }
-        }
-
-        srcpT += stride;
-        gmnT += stride;
-        dirT += stride;
-    }
-
-    memcpy(srcp, gimg, stride * height * sizeof(float));
-
-    if ((mode & 1) || nms == 0)
-        return;
-
+static void gmDirImages(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, float * VS_RESTRICT dimg, const int width, const int height, const int stride, const int nms) {
     const int offTable[4] = { 1, -stride + 1, -stride, -stride - 1 };
-    srcpT = srcp + stride;
-    gmnT = gimg + stride;
-    dirT = dimg + stride;
+    srcp += stride;
+    gimg += stride;
+    dimg += stride;
 
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             if (nms & 1) {
-                const int off = offTable[getBin<int>(dirT[x], 4)];
-                if (gmnT[x] >= std::max(gmnT[x + off], gmnT[x - off]))
+                const int off = offTable[getBin<int>(dimg[x], 4)];
+                if (gimg[x] >= std::max(gimg[x + off], gimg[x - off]))
                     continue;
             }
 
             if (nms & 2) {
-                const int c = static_cast<int>(dirT[x] * (4.f * M_1_PIF));
+                const int c = static_cast<int>(dimg[x] * (4.f * M_1_PIF));
                 float val1, val2;
 
                 if (c == 0 || c >= 4) {
-                    const float h = std::tan(dirT[x]);
-                    val1 = (1.f - h) * gmnT[x + 1] + h * gmnT[x - stride + 1];
-                    val2 = (1.f - h) * gmnT[x - 1] + h * gmnT[x + stride - 1];
+                    const float h = std::tan(dimg[x]);
+                    val1 = (1.f - h) * gimg[x + 1] + h * gimg[x - stride + 1];
+                    val2 = (1.f - h) * gimg[x - 1] + h * gimg[x + stride - 1];
                 } else if (c == 1) {
-                    const float w = 1.f / std::tan(dirT[x]);
-                    val1 = (1.f - w) * gmnT[x - stride] + w * gmnT[x - stride + 1];
-                    val2 = (1.f - w) * gmnT[x + stride] + w * gmnT[x + stride - 1];
+                    const float w = 1.f / std::tan(dimg[x]);
+                    val1 = (1.f - w) * gimg[x - stride] + w * gimg[x - stride + 1];
+                    val2 = (1.f - w) * gimg[x + stride] + w * gimg[x + stride - 1];
                 } else if (c == 2) {
-                    const float w = 1.f / std::tan(M_PIF - dirT[x]);
-                    val1 = (1.f - w) * gmnT[x - stride] + w * gmnT[x - stride - 1];
-                    val2 = (1.f - w) * gmnT[x + stride] + w * gmnT[x + stride + 1];
+                    const float w = 1.f / std::tan(M_PIF - dimg[x]);
+                    val1 = (1.f - w) * gimg[x - stride] + w * gimg[x - stride - 1];
+                    val2 = (1.f - w) * gimg[x + stride] + w * gimg[x + stride + 1];
                 } else {
-                    const float h = std::tan(M_PIF - dirT[x]);
-                    val1 = (1.f - h) * gmnT[x - 1] + h * gmnT[x - stride - 1];
-                    val2 = (1.f - h) * gmnT[x + 1] + h * gmnT[x + stride + 1];
+                    const float h = std::tan(M_PIF - dimg[x]);
+                    val1 = (1.f - h) * gimg[x - 1] + h * gimg[x - stride - 1];
+                    val2 = (1.f - h) * gimg[x + 1] + h * gimg[x + stride + 1];
                 }
 
-                if (gmnT[x] >= std::max(val1, val2))
+                if (gimg[x] >= std::max(val1, val2))
                     continue;
             }
 
-            srcpT[x] = -FLT_MAX;
+            srcp[x] = -FLT_MAX;
         }
 
-        srcpT += stride;
-        gmnT += stride;
-        dirT += stride;
+        srcp += stride;
+        gimg += stride;
+        dimg += stride;
     }
 }
 
@@ -392,15 +654,18 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRIC
             const int width = vsapi->getFrameWidth(src, plane);
             const int height = vsapi->getFrameHeight(src, plane);
             const int stride = vsapi->getStride(src, plane) / sizeof(T);
-            const T * srcp = reinterpret_cast<const T *>(vsapi->getReadPtr(src, plane));
+            const uint8_t * srcp = vsapi->getReadPtr(src, plane);
             T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
             const float offset = (d->vi->format->sampleType == stInteger || plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.f : 0.5f;
 
-            genConvV<T>(srcp, fa[1], d->weights, width, height, stride, d->grad, offset);
+            d->genConvV(srcp, fa[1], d->weights, width, height, stride, d->grad, offset);
             genConvH(fa[1], fa[0], d->weights, width, height, stride, d->grad);
 
-            if (d->mode != -1)
-                gmDirImages(fa[0], fa[1], fa[2], width, height, stride, d->nms, d->mode, d->op);
+            if (d->mode != -1) {
+                detectEdge(fa[0], fa[1], fa[2], width, height, stride, d->mode, d->op);
+                if (!((d->mode & 1) || d->nms == 0))
+                    gmDirImages(fa[0], fa[1], fa[2], width, height, stride, d->nms);
+            }
 
             if (!(d->mode & 1))
                 hystersis(fa[0], stack, width, height, stride, d->t_h, d->t_l);
@@ -430,6 +695,10 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
+#ifdef VS_TARGET_CPU_X86
+        no_subnormals();
+#endif
+
         const VSFrameRef * src = vsapi->getFrameFilter(n, d->node, frameCtx);
         const VSFrameRef * fr[] = { d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
         const int pl[] = { 0, 1, 2 };
@@ -481,7 +750,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 static void VS_CC tcannyFree(void *instanceData, VSCore *core, const VSAPI *vsapi) {
     TCannyData * d = static_cast<TCannyData *>(instanceData);
     vsapi->freeNode(d->node);
-    vs_aligned_free(d->weights);
+    delete[] d->weights;
     delete d;
 }
 
@@ -578,6 +847,11 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         d.t_l = scale(d.t_l, d.vi->format->bitsPerSample);
         d.bins = 1 << d.vi->format->bitsPerSample;
         d.peak = d.bins - 1;
+
+        if (d.vi->format->bitsPerSample == 8)
+            d.genConvV = genConvV_uint8;
+        else
+            d.genConvV = genConvV_uint16;
     } else {
         d.t_h /= 255.f;
         d.t_l /= 255.f;
@@ -594,6 +868,8 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
                 }
             }
         }
+
+        d.genConvV = genConvV_float;
     }
 
     d.weights = gaussianWeights(d.sigma, d.grad);
