@@ -249,9 +249,9 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
                     - Vec8f().load_a(srcp + x + stride - 1) - Vec8f().load(srcp + x + stride) - Vec8f().load(srcp + x + stride + 1)) * pointFive;
             } else {
                 dx = Vec8f().load(srcp + x - stride + 1) + mul_add(two, Vec8f().load(srcp + x + 1), Vec8f().load(srcp + x + stride + 1))
-                    - Vec8f().load_a(srcp + x - stride - 1) - mul_sub(two, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcp + x + stride - 1));
+                    - Vec8f().load_a(srcp + x - stride - 1) - mul_add(two, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcp + x + stride - 1));
                 dy = Vec8f().load_a(srcp + x - stride - 1) + mul_add(two, Vec8f().load(srcp + x - stride), Vec8f().load(srcp + x - stride + 1))
-                    - Vec8f().load_a(srcp + x + stride - 1) - mul_sub(two, Vec8f().load(srcp + x + stride), Vec8f().load(srcp + x + stride + 1));
+                    - Vec8f().load_a(srcp + x + stride - 1) - mul_add(two, Vec8f().load(srcp + x + stride), Vec8f().load(srcp + x + stride + 1));
             }
 
             sqrt(mul_add(dx, dx, dy * dy)).store(gimg + x);
