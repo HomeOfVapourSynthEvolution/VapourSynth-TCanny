@@ -88,7 +88,7 @@ DEBUG=""
 
 LIBNAME=""
 
-CXXFLAGS="-std=c++11 -fabi-version=6 -Wall -I. -I$SRCDIR/include"
+CXXFLAGS="-std=c++11 -Wall -I. -I$SRCDIR/include"
 LDFLAGS=""
 SOFLAGS="-shared"
 
@@ -170,7 +170,7 @@ case "$TARGET_OS" in
         ;;
     *linux*)
         LIBNAME="libtcanny.so"
-        CXXFLAGS="$CXXFLAGS -fPIC"
+        CXXFLAGS="$CXXFLAGS -fabi-version=6 -fPIC"
         SOFLAGS="$SOFLAGS -fPIC"
         ;;
     *)
