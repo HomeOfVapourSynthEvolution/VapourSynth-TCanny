@@ -91,7 +91,7 @@ static float * gaussianWeights(const float sigma, int * rad) {
 static void genConvV_uint8(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float offset) {
     const int length = rad * 2 + 1;
     const uint8_t ** _srcp = new const uint8_t *[length];
-    const Vec8f zero(0.f);
+    const Vec8f zero { 0.f };
 
     for (int i = -rad; i <= rad; i++)
         _srcp[i + rad] = __srcp + stride * std::abs(i);
@@ -105,7 +105,7 @@ static void genConvV_uint8(const uint8_t * __srcp, float * dstp, const float * _
                 const Vec8s srcp_8s = Vec8s(extend_low(srcp_16uc));
                 const Vec8i srcp_8i = Vec8i(extend_low(srcp_8s), extend_high(srcp_8s));
                 const Vec8f srcp = to_float(srcp_8i);
-                const Vec8f weights(_weights[i]);
+                const Vec8f weights { _weights[i] };
                 sum = mul_add(srcp, weights, sum);
             }
 
@@ -125,7 +125,7 @@ static void genConvV_uint8(const uint8_t * __srcp, float * dstp, const float * _
 static void genConvV_uint16(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float offset) {
     const int length = rad * 2 + 1;
     const uint16_t ** _srcp = new const uint16_t *[length];
-    const Vec8f zero(0.f);
+    const Vec8f zero { 0.f };
 
     for (int i = -rad; i <= rad; i++)
         _srcp[i + rad] = reinterpret_cast<const uint16_t *>(__srcp) + stride * std::abs(i);
@@ -138,7 +138,7 @@ static void genConvV_uint16(const uint8_t * __srcp, float * dstp, const float * 
                 const Vec8us srcp_8us = Vec8us().load_a(_srcp[i] + x);
                 const Vec8i srcp_8i = Vec8i(extend_low(srcp_8us), extend_high(srcp_8us));
                 const Vec8f srcp = to_float(srcp_8i);
-                const Vec8f weights(_weights[i]);
+                const Vec8f weights { _weights[i] };
                 sum = mul_add(srcp, weights, sum);
             }
 
@@ -158,8 +158,8 @@ static void genConvV_uint16(const uint8_t * __srcp, float * dstp, const float * 
 static void genConvV_float(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float _offset) {
     const int length = rad * 2 + 1;
     const float ** _srcp = new const float *[length];
-    const Vec8f zero(0.f);
-    const Vec8f offset(_offset);
+    const Vec8f zero { 0.f };
+    const Vec8f offset { _offset };
 
     for (int i = -rad; i <= rad; i++)
         _srcp[i + rad] = reinterpret_cast<const float *>(__srcp) + stride * std::abs(i);
@@ -170,7 +170,7 @@ static void genConvV_float(const uint8_t * __srcp, float * dstp, const float * _
 
             for (int i = 0; i < length; i++) {
                 const Vec8f srcp = Vec8f().load_a(_srcp[i] + x);
-                const Vec8f weights(_weights[i]);
+                const Vec8f weights { _weights[i] };
                 sum = mul_add(srcp + offset, weights, sum);
             }
 
@@ -191,7 +191,7 @@ static void genConvH(const float * __srcp, float * dstp, const float * _weights,
     float * VS_RESTRICT _srcp = new float[stride + rad * 2];
     float * srcpSaved = _srcp;
     _srcp += rad;
-    const Vec8f zero(0.f);
+    const Vec8f zero { 0.f };
 
     for (int y = 0; y < height; y++) {
         memcpy(_srcp, __srcp, width * sizeof(float));
@@ -205,7 +205,7 @@ static void genConvH(const float * __srcp, float * dstp, const float * _weights,
 
             for (int i = -rad; i <= rad; i++) {
                 const Vec8f srcp = Vec8f().load(_srcp + x + i);
-                const Vec8f weights(_weights[i + rad]);
+                const Vec8f weights { _weights[i + rad] };
                 sum = mul_add(srcp, weights, sum);
             }
 
@@ -221,10 +221,10 @@ static void genConvH(const float * __srcp, float * dstp, const float * _weights,
 
 static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const int mode, const int op) {
     const int regularPart = (width % 8 ? width : width - 1) & -8;
-    const Vec8f zero(0.f);
-    const Vec8f pointFive(0.5f);
-    const Vec8f two(2.f);
-    const Vec8f PI(M_PIF);
+    const Vec8f zero { 0.f };
+    const Vec8f pointFive { 0.5f };
+    const Vec8f two { 2.f };
+    const Vec8f PI { M_PIF };
 
     memset(_gimg, 0, stride * height * sizeof(float));
     memset(_dimg, 0, stride * height * sizeof(float));
@@ -454,7 +454,7 @@ float getBin<float>(const float dir, const int n) {
 }
 
 static void nonMaximumSuppression(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, float * VS_RESTRICT dimg, const int width, const int height, const int stride, const int nms) {
-    const int offTable[4] = { 1, -stride + 1, -stride, -stride - 1 };
+    const int offTable[4] { 1, -stride + 1, -stride, -stride - 1 };
     srcp += stride;
     gimg += stride;
     dimg += stride;
@@ -708,8 +708,8 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 #endif
 
         const VSFrameRef * src = vsapi->getFrameFilter(n, d->node, frameCtx);
-        const VSFrameRef * fr[] = { d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
-        const int pl[] = { 0, 1, 2 };
+        const VSFrameRef * fr[] { d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
+        const int pl[] { 0, 1, 2 };
         VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
 
         float * fa[3];
@@ -723,7 +723,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
             }
         }
 
-        Stack stack = {};
+        Stack stack {};
         if (!(d->mode & 1)) {
             stack.map = vs_aligned_malloc<uint8_t>(d->vi->width * d->vi->height, 32);
             stack.pos = vs_aligned_malloc<std::pair<int, int>>(d->vi->width * d->vi->height * sizeof(std::pair<int, int>), 32);
@@ -757,7 +757,9 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
 static void VS_CC tcannyFree(void *instanceData, VSCore *core, const VSAPI *vsapi) {
     TCannyData * d = static_cast<TCannyData *>(instanceData);
+
     vsapi->freeNode(d->node);
+
     delete[] d->weights;
     delete d;
 }
@@ -889,7 +891,7 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
     d.magnitude = 255.f / d.gmmax;
 
-    TCannyData * data = new TCannyData(d);
+    TCannyData * data = new TCannyData { d };
 
     vsapi->createFilter(in, out, "TCanny", tcannyInit, tcannyGetFrame, tcannyFree, fmParallel, 0, data, core);
 }
