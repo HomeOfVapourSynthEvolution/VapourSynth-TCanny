@@ -1,8 +1,8 @@
 /****************************  vectori128.h   *******************************
 * Author:        Agner Fog
 * Date created:  2012-05-30
-* Last modified: 2015-12-25
-* Version:       1.20
+* Last modified: 2016-04-26
+* Version:       1.22
 * Project:       vector classes
 * Description:
 * Header file defining integer vector classes as interface to intrinsic 
@@ -39,7 +39,7 @@
 *
 * For detailed instructions, see VectorClass.pdf
 *
-* (c) Copyright 2012 - 2015 GNU General Public License http://www.gnu.org/licenses
+* (c) Copyright 2012 - 2016 GNU General Public License http://www.gnu.org/licenses
 *****************************************************************************/
 #ifndef VECTORI128_H
 #define VECTORI128_H
@@ -50,7 +50,9 @@
 #error Please compile for the SSE2 instruction set or higher
 #endif
 
-
+#ifdef VCL_NAMESPACE
+namespace VCL_NAMESPACE {
+#endif
 
 /*****************************************************************************
 *
@@ -344,7 +346,7 @@ public:
         else {
             // worst case. read 1 byte at a time and suffer store forwarding penalty
             char x[16];
-            for (int i = 0; i < n; i++) x[i] = ((char *)p)[i];
+            for (int i = 0; i < n; i++) x[i] = ((char const *)p)[i];
             load(x);
         }
         cutoff(n);
@@ -525,6 +527,22 @@ static inline Vec16cb operator ! (Vec16cb const & a) {
 static inline Vec16cb andnot (Vec16cb const & a, Vec16cb const & b) {
     return Vec16cb(andnot(Vec128b(a), Vec128b(b)));
 }
+
+// Horizontal Boolean functions for Vec16cb
+
+// horizontal_and. Returns true if all elements are true
+static inline bool horizontal_and(Vec16cb const & a) {
+    return _mm_movemask_epi8(a) == 0xFFFF;
+}
+
+// horizontal_or. Returns true if at least one element is true
+static inline bool horizontal_or(Vec16cb const & a) {
+#if INSTRSET >= 5   // SSE4.1 supported. Use PTEST
+    return !_mm_testz_si128(a, a);
+#else
+    return _mm_movemask_epi8(a) != 0;
+#endif
+} 
 
 
 /*****************************************************************************
@@ -1123,7 +1141,7 @@ public:
         else {
             // worst case. read 1 byte at a time and suffer store forwarding penalty
             int16_t x[8];
-            for (int i = 0; i < n; i++) x[i] = ((int16_t *)p)[i];
+            for (int i = 0; i < n; i++) x[i] = ((int16_t const *)p)[i];
             load(x);
         }
         cutoff(n);
@@ -1326,6 +1344,22 @@ static inline Vec8sb operator ! (Vec8sb const & a) {
 // vector function andnot
 static inline Vec8sb andnot (Vec8sb const & a, Vec8sb const & b) {
     return Vec8sb(andnot(Vec128b(a), Vec128b(b)));
+}
+
+// Horizontal Boolean functions for Vec8sb
+
+// horizontal_and. Returns true if all elements are true
+static inline bool horizontal_and(Vec8sb const & a) {
+    return _mm_movemask_epi8(a) == 0xFFFF;
+}
+
+// horizontal_or. Returns true if at least one element is true
+static inline bool horizontal_or(Vec8sb const & a) {
+#if INSTRSET >= 5   // SSE4.1 supported. Use PTEST
+    return !_mm_testz_si128(a, a);
+#else
+    return _mm_movemask_epi8(a) != 0;
+#endif
 }
 
 
@@ -1947,12 +1981,12 @@ public:
         case 0:
             *this = 0;  break;
         case 1:
-            xmm = _mm_cvtsi32_si128(*(int32_t*)p);  break;
+            xmm = _mm_cvtsi32_si128(*(int32_t const*)p);  break;
         case 2:
             // intrinsic for movq is missing!
-            xmm = _mm_setr_epi32(((int32_t*)p)[0], ((int32_t*)p)[1], 0, 0);  break;
+            xmm = _mm_setr_epi32(((int32_t const*)p)[0], ((int32_t const*)p)[1], 0, 0);  break;
         case 3:
-            xmm = _mm_setr_epi32(((int32_t*)p)[0], ((int32_t*)p)[1], ((int32_t*)p)[2], 0);  break;
+            xmm = _mm_setr_epi32(((int32_t const*)p)[0], ((int32_t const*)p)[1], ((int32_t const*)p)[2], 0);  break;
         case 4:
             load(p);  break;
         default: 
@@ -2120,6 +2154,22 @@ static inline Vec4ib operator ! (Vec4ib const & a) {
 // vector function andnot
 static inline Vec4ib andnot (Vec4ib const & a, Vec4ib const & b) {
     return Vec4ib(andnot(Vec128b(a), Vec128b(b)));
+}
+
+// Horizontal Boolean functions for Vec4ib
+
+// horizontal_and. Returns true if all elements are true
+static inline bool horizontal_and(Vec4ib const & a) {
+    return _mm_movemask_epi8(a) == 0xFFFF;
+}
+
+// horizontal_or. Returns true if at least one element is true
+static inline bool horizontal_or(Vec4ib const & a) {
+#if INSTRSET >= 5   // SSE4.1 supported. Use PTEST
+    return !_mm_testz_si128(a, a);
+#else
+    return _mm_movemask_epi8(a) != 0;
+#endif
 }
 
 
@@ -2706,7 +2756,7 @@ public:
     }
     // Constructor to broadcast the same value into all elements:
     Vec2q(int64_t i) {
-#if defined (_MSC_VER) && ! defined(__INTEL_COMPILER)
+#if defined (_MSC_VER) && _MSC_VER < 1900 && ! defined(__INTEL_COMPILER)
         // MS compiler has no _mm_set1_epi64x in 32 bit mode
 #if defined(__x86_64__)                                    // 64 bit mode
 #if _MSC_VER < 1700
@@ -2733,12 +2783,12 @@ public:
 
 #endif  // __x86_64__
 #else   // Other compilers
-        xmm = _mm_set1_epi64x(i);   // emmintrin.h
+        xmm = _mm_set1_epi64x(i);
 #endif
     }
     // Constructor to build from all elements:
     Vec2q(int64_t i0, int64_t i1) {
-#if defined (_MSC_VER) && ! defined(__INTEL_COMPILER)
+#if defined (_MSC_VER)  && _MSC_VER < 1900 && ! defined(__INTEL_COMPILER)
         // MS compiler has no _mm_set_epi64x in 32 bit mode
 #if defined(__x86_64__)                                    // 64 bit mode
 #if _MSC_VER < 1700
@@ -2791,7 +2841,7 @@ public:
             *this = 0;  break;
         case 1:
             // intrinsic for movq is missing!
-            *this = Vec2q(*(int64_t*)p, 0);  break;
+            *this = Vec2q(*(int64_t const*)p, 0);  break;
         case 2:
             load(p);  break;
         default: 
@@ -2973,6 +3023,22 @@ static inline Vec2qb operator ! (Vec2qb const & a) {
 static inline Vec2qb andnot (Vec2qb const & a, Vec2qb const & b) {
     return Vec2qb(andnot(Vec128b(a), Vec128b(b)));
 }
+
+// Horizontal Boolean functions for Vec2qb
+
+// horizontal_and. Returns true if all elements are true
+static inline bool horizontal_and(Vec2qb const & a) {
+    return _mm_movemask_epi8(a) == 0xFFFF;
+}
+
+// horizontal_or. Returns true if at least one element is true
+static inline bool horizontal_or(Vec2qb const & a) {
+#if INSTRSET >= 5   // SSE4.1 supported. Use PTEST
+    return !_mm_testz_si128(a, a);
+#else
+    return _mm_movemask_epi8(a) != 0;
+#endif
+} 
 
 
 /*****************************************************************************
@@ -5374,7 +5440,7 @@ public:
         sign       = _mm_set1_epi32(sgn);
     }
     void set(int32_t d) {                                  // Set or change divisor, calculate parameters
-        const int32_t d1 = abs(d);
+        const int32_t d1 = ::abs(d);
         int32_t sh, m;
         if (d1 > 1) {
             sh = bit_scan_reverse(d1-1);                   // shift count = ceil(log2(d1))-1 = (bit_scan_reverse(d1-1)+1)-1
@@ -5471,7 +5537,7 @@ public:
         sign       = _mm_set1_epi32(sgn);
     }
     void set(int16_t d) {                                  // Set or change divisor, calculate parameters
-        const int32_t d1 = abs(d);
+        const int32_t d1 = ::abs(d);
         int32_t sh, m;
         if (d1 > 1) {
             sh = bit_scan_reverse(d1-1);                   // shift count = ceil(log2(d1))-1 = (bit_scan_reverse(d1-1)+1)-1
@@ -6147,5 +6213,9 @@ static inline uint8_t to_bits(Vec2qb x);
 static inline Vec2qb to_Vec2qb(uint8_t x);
 
 #endif  // INSTRSET < 9 || MAX_VECTOR_SIZE < 512
+
+#ifdef VCL_NAMESPACE
+}
+#endif
 
 #endif // VECTORI128_H
