@@ -224,6 +224,8 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
     const Vec8f zero { 0.f };
     const Vec8f pointFive { 0.5f };
     const Vec8f two { 2.f };
+    const Vec8f three { 3.f };
+    const Vec8f ten { 10.f };
     const Vec8f PI { M_PIF };
 
     memset(_gimg, 0, stride * height * sizeof(float));
@@ -247,11 +249,16 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
                     - Vec8f().load_a(srcp + x - stride - 1) - Vec8f().load_a(srcp + x - 1) - Vec8f().load_a(srcp + x + stride - 1)) * pointFive;
                 dy = (Vec8f().load_a(srcp + x - stride - 1) + Vec8f().load(srcp + x - stride) + Vec8f().load(srcp + x - stride + 1)
                     - Vec8f().load_a(srcp + x + stride - 1) - Vec8f().load(srcp + x + stride) - Vec8f().load(srcp + x + stride + 1)) * pointFive;
-            } else {
+            } else if (op == 2) {
                 dx = Vec8f().load(srcp + x - stride + 1) + mul_add(two, Vec8f().load(srcp + x + 1), Vec8f().load(srcp + x + stride + 1))
                     - Vec8f().load_a(srcp + x - stride - 1) - mul_add(two, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcp + x + stride - 1));
                 dy = Vec8f().load_a(srcp + x - stride - 1) + mul_add(two, Vec8f().load(srcp + x - stride), Vec8f().load(srcp + x - stride + 1))
                     - Vec8f().load_a(srcp + x + stride - 1) - mul_add(two, Vec8f().load(srcp + x + stride), Vec8f().load(srcp + x + stride + 1));
+            } else {
+                dx = mul_add(three, Vec8f().load(srcp + x - stride + 1), mul_add(ten, Vec8f().load(srcp + x + 1), three * Vec8f().load(srcp + x + stride + 1)))
+                    - mul_add(three, Vec8f().load_a(srcp + x - stride - 1), mul_add(ten, Vec8f().load_a(srcp + x - 1), three * Vec8f().load_a(srcp + x + stride - 1)));
+                dy = mul_add(three, Vec8f().load_a(srcp + x - stride - 1), mul_add(ten, Vec8f().load(srcp + x - stride), three * Vec8f().load(srcp + x - stride + 1)))
+                    - mul_add(three, Vec8f().load_a(srcp + x + stride - 1), mul_add(ten, Vec8f().load(srcp + x + stride), three * Vec8f().load(srcp + x + stride + 1)));
             }
 
             sqrt(mul_add(dx, dx, dy * dy)).store(gimg + x);
@@ -271,9 +278,12 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
             } else if (op == 1) {
                 dx = (srcp[x - stride + 1] + srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - srcp[x - 1] - srcp[x + stride - 1]) / 2.f;
                 dy = (srcp[x - stride - 1] + srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - srcp[x + stride] - srcp[x + stride + 1]) / 2.f;
-            } else {
+            } else if (op == 2) {
                 dx = srcp[x - stride + 1] + 2.f * srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - 2.f * srcp[x - 1] - srcp[x + stride - 1];
                 dy = srcp[x - stride - 1] + 2.f * srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - 2.f * srcp[x + stride] - srcp[x + stride + 1];
+            } else {
+                dx = 3.f * srcp[x - stride + 1] + 10.f * srcp[x + 1] + 3.f * srcp[x + stride + 1] - 3.f * srcp[x - stride - 1] - 10.f * srcp[x - 1] - 3.f * srcp[x + stride - 1];
+                dy = 3.f * srcp[x - stride - 1] + 10.f * srcp[x - stride] + 3.f * srcp[x - stride + 1] - 3.f * srcp[x + stride - 1] - 10.f * srcp[x + stride] - 3.f * srcp[x + stride + 1];
             }
 
             gimg[x] = std::sqrt(dx * dx + dy * dy);
@@ -419,9 +429,12 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
             } else if (op == 1) {
                 dx = (srcp[x - stride + 1] + srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - srcp[x - 1] - srcp[x + stride - 1]) / 2.f;
                 dy = (srcp[x - stride - 1] + srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - srcp[x + stride] - srcp[x + stride + 1]) / 2.f;
-            } else {
+            } else if (op == 2) {
                 dx = srcp[x - stride + 1] + 2.f * srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - 2.f * srcp[x - 1] - srcp[x + stride - 1];
                 dy = srcp[x - stride - 1] + 2.f * srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - 2.f * srcp[x + stride] - srcp[x + stride + 1];
+            } else {
+                dx = 3.f * srcp[x - stride + 1] + 10.f * srcp[x + 1] + 3.f * srcp[x + stride + 1] - 3.f * srcp[x - stride - 1] - 10.f * srcp[x - 1] - 3.f * srcp[x + stride - 1];
+                dy = 3.f * srcp[x - stride - 1] + 10.f * srcp[x - stride] + 3.f * srcp[x - stride + 1] - 3.f * srcp[x + stride - 1] - 10.f * srcp[x + stride] - 3.f * srcp[x + stride + 1];
             }
 
             gimg[x] = std::sqrt(dx * dx + dy * dy);
@@ -809,8 +822,8 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         return;
     }
 
-    if (d.op < 0 || d.op > 2) {
-        vsapi->setError(out, "TCanny: op must be 0, 1 or 2");
+    if (d.op < 0 || d.op > 3) {
+        vsapi->setError(out, "TCanny: op must be 0, 1, 2 or 3");
         return;
     }
 

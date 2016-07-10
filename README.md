@@ -32,6 +32,7 @@ Usage
   * 0 = the operator used in tritical's original filter
   * 1 = the operator proposed by P. Zhou et al.
   * 2 = the Sobel operator
+  * 3 = the Scharr operator
 
 * gmmax: Used for scaling gradient magnitude into [0, 2^bitdepth-1] for mode=1.
 
