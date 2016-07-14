@@ -39,12 +39,12 @@ struct TCannyData {
     float sigma, t_h, t_l, gmmax;
     int nms, mode, op;
     bool process[3];
-    int grad, bins;
+    int radius, bins;
     float * weights;
     float magnitude;
     int peak;
     float lower[3], upper[3];
-    void (*genConvV)(const uint8_t * srcp, float * dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset);
+    void (*gaussianBlurVertical)(const uint8_t * srcp, float * dstp, const float * weights, const int width, const int height, const int stride, const int radius, const float offset);
 };
 
 struct Stack {
@@ -66,41 +66,42 @@ static inline float scale(const float val, const int bits) {
     return val * ((1 << bits) - 1) / 255.f;
 }
 
-static float * gaussianWeights(const float sigma, int * rad) {
-    const int dia = std::max(static_cast<int>(sigma * 3.f + 0.5f), 1) * 2 + 1;
-    *rad = dia / 2;
+static float * gaussianWeights(const float sigma, int * radius) {
+    const int diameter = std::max(static_cast<int>(sigma * 3.f + 0.5f), 1) * 2 + 1;
+    *radius = diameter / 2;
     float sum = 0.f;
 
-    float * VS_RESTRICT weights = new (std::nothrow) float[dia];
+    float * VS_RESTRICT weights = new (std::nothrow) float[diameter];
     if (!weights)
         return nullptr;
 
-    for (int k = -(*rad); k <= *rad; k++) {
+    for (int k = -(*radius); k <= *radius; k++) {
         const float w = std::exp(-(k * k) / (2.f * sigma * sigma));
-        weights[k + *rad] = w;
+        weights[k + *radius] = w;
         sum += w;
     }
 
-    for (int k = 0; k < dia; k++)
+    for (int k = 0; k < diameter; k++)
         weights[k] /= sum;
 
     return weights;
 }
 
 #ifdef VS_TARGET_CPU_X86
-static void genConvV_uint8(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float offset) {
-    const int length = rad * 2 + 1;
-    const uint8_t ** _srcp = new const uint8_t *[length];
+static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride,
+                                       const int radius, const float offset) {
+    const int diameter = radius * 2 + 1;
+    const uint8_t ** _srcp = new const uint8_t *[diameter];
     const Vec8f zero { 0.f };
 
-    for (int i = -rad; i <= rad; i++)
-        _srcp[i + rad] = __srcp + stride * std::abs(i);
+    for (int i = -radius; i <= radius; i++)
+        _srcp[i + radius] = __srcp + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
             Vec8f sum = zero;
 
-            for (int i = 0; i < length; i++) {
+            for (int i = 0; i < diameter; i++) {
                 const Vec16uc srcp_16uc = Vec16uc().load(_srcp[i] + x);
                 const Vec8s srcp_8s = Vec8s(extend_low(srcp_16uc));
                 const Vec8i srcp_8i = Vec8i(extend_low(srcp_8s), extend_high(srcp_8s));
@@ -112,29 +113,30 @@ static void genConvV_uint8(const uint8_t * __srcp, float * dstp, const float * _
             sum.store_a(dstp + x);
         }
 
-        for (int i = 0; i < length - 1; i++)
+        for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
 
-        _srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        _srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
         dstp += stride;
     }
 
     delete[] _srcp;
 }
 
-static void genConvV_uint16(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float offset) {
-    const int length = rad * 2 + 1;
-    const uint16_t ** _srcp = new const uint16_t *[length];
+static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride,
+                                        const int radius, const float offset) {
+    const int diameter = radius * 2 + 1;
+    const uint16_t ** _srcp = new const uint16_t *[diameter];
     const Vec8f zero { 0.f };
 
-    for (int i = -rad; i <= rad; i++)
-        _srcp[i + rad] = reinterpret_cast<const uint16_t *>(__srcp) + stride * std::abs(i);
+    for (int i = -radius; i <= radius; i++)
+        _srcp[i + radius] = reinterpret_cast<const uint16_t *>(__srcp) + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
             Vec8f sum = zero;
 
-            for (int i = 0; i < length; i++) {
+            for (int i = 0; i < diameter; i++) {
                 const Vec8us srcp_8us = Vec8us().load_a(_srcp[i] + x);
                 const Vec8i srcp_8i = Vec8i(extend_low(srcp_8us), extend_high(srcp_8us));
                 const Vec8f srcp = to_float(srcp_8i);
@@ -145,30 +147,31 @@ static void genConvV_uint16(const uint8_t * __srcp, float * dstp, const float * 
             sum.store_a(dstp + x);
         }
 
-        for (int i = 0; i < length - 1; i++)
+        for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
 
-        _srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        _srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
         dstp += stride;
     }
 
     delete[] _srcp;
 }
 
-static void genConvV_float(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad, const float _offset) {
-    const int length = rad * 2 + 1;
-    const float ** _srcp = new const float *[length];
+static void gaussianBlurVertical_float(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride,
+                                       const int radius, const float _offset) {
+    const int diameter = radius * 2 + 1;
+    const float ** _srcp = new const float *[diameter];
     const Vec8f zero { 0.f };
     const Vec8f offset { _offset };
 
-    for (int i = -rad; i <= rad; i++)
-        _srcp[i + rad] = reinterpret_cast<const float *>(__srcp) + stride * std::abs(i);
+    for (int i = -radius; i <= radius; i++)
+        _srcp[i + radius] = reinterpret_cast<const float *>(__srcp) + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
             Vec8f sum = zero;
 
-            for (int i = 0; i < length; i++) {
+            for (int i = 0; i < diameter; i++) {
                 const Vec8f srcp = Vec8f().load_a(_srcp[i] + x);
                 const Vec8f weights { _weights[i] };
                 sum = mul_add(srcp + offset, weights, sum);
@@ -177,25 +180,25 @@ static void genConvV_float(const uint8_t * __srcp, float * dstp, const float * _
             sum.store_a(dstp + x);
         }
 
-        for (int i = 0; i < length - 1; i++)
+        for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
 
-        _srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        _srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
         dstp += stride;
     }
 
     delete[] _srcp;
 }
 
-static void genConvH(const float * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int rad) {
-    float * VS_RESTRICT _srcp = new float[stride + rad * 2];
+static void gaussianBlurHorizontal(const float * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int radius) {
+    float * VS_RESTRICT _srcp = new float[stride + radius * 2];
     float * srcpSaved = _srcp;
-    _srcp += rad;
+    _srcp += radius;
     const Vec8f zero { 0.f };
 
     for (int y = 0; y < height; y++) {
         memcpy(_srcp, __srcp, width * sizeof(float));
-        for (int i = 1; i <= rad; i++) {
+        for (int i = 1; i <= radius; i++) {
             _srcp[-i] = __srcp[i];
             _srcp[width - 1 + i] = __srcp[width - 1 - i];
         }
@@ -203,9 +206,9 @@ static void genConvH(const float * __srcp, float * dstp, const float * _weights,
         for (int x = 0; x < width; x += 8) {
             Vec8f sum = zero;
 
-            for (int i = -rad; i <= rad; i++) {
+            for (int i = -radius; i <= radius; i++) {
                 const Vec8f srcp = Vec8f().load(_srcp + x + i);
-                const Vec8f weights { _weights[i + rad] };
+                const Vec8f weights { _weights[i + radius] };
                 sum = mul_add(srcp, weights, sum);
             }
 
@@ -302,95 +305,98 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
     memcpy(_srcp, _gimg, stride * height * sizeof(float));
 }
 #else
-static void genConvV_uint8(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
-    const int length = rad * 2 + 1;
-    const uint8_t ** srcp = new const uint8_t *[length];
+static void gaussianBlurVertical_uint8(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride,
+                                       const int radius, const float offset) {
+    const int diameter = radius * 2 + 1;
+    const uint8_t ** srcp = new const uint8_t *[diameter];
 
-    for (int i = -rad; i <= rad; i++)
-        srcp[i + rad] = _srcp + stride * std::abs(i);
+    for (int i = -radius; i <= radius; i++)
+        srcp[i + radius] = _srcp + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             float sum = 0.f;
 
-            for (int i = 0; i < length; i++)
+            for (int i = 0; i < diameter; i++)
                 sum += srcp[i][x] * weights[i];
 
             dstp[x] = sum;
         }
 
-        for (int i = 0; i < length - 1; i++)
+        for (int i = 0; i < diameter - 1; i++)
             srcp[i] = srcp[i + 1];
 
-        srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
         dstp += stride;
     }
 
     delete[] srcp;
 }
 
-static void genConvV_uint16(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
-    const int length = rad * 2 + 1;
-    const uint16_t ** srcp = new const uint16_t *[length];
+static void gaussianBlurVertical_uint16(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride,
+                                        const int radius, const float offset) {
+    const int diameter = radius * 2 + 1;
+    const uint16_t ** srcp = new const uint16_t *[diameter];
 
-    for (int i = -rad; i <= rad; i++)
-        srcp[i + rad] = reinterpret_cast<const uint16_t *>(_srcp) + stride * std::abs(i);
+    for (int i = -radius; i <= radius; i++)
+        srcp[i + radius] = reinterpret_cast<const uint16_t *>(_srcp) + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             float sum = 0.f;
 
-            for (int i = 0; i < length; i++)
+            for (int i = 0; i < diameter; i++)
                 sum += srcp[i][x] * weights[i];
 
             dstp[x] = sum;
         }
 
-        for (int i = 0; i < length - 1; i++)
+        for (int i = 0; i < diameter - 1; i++)
             srcp[i] = srcp[i + 1];
 
-        srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
         dstp += stride;
     }
 
     delete[] srcp;
 }
 
-static void genConvV_float(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad, const float offset) {
-    const int length = rad * 2 + 1;
-    const float ** srcp = new const float *[length];
+static void gaussianBlurVertical_float(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride,
+                                       const int radius, const float offset) {
+    const int diameter = radius * 2 + 1;
+    const float ** srcp = new const float *[diameter];
 
-    for (int i = -rad; i <= rad; i++)
-        srcp[i + rad] = reinterpret_cast<const float *>(_srcp) + stride * std::abs(i);
+    for (int i = -radius; i <= radius; i++)
+        srcp[i + radius] = reinterpret_cast<const float *>(_srcp) + stride * std::abs(i);
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             float sum = 0.f;
 
-            for (int i = 0; i < length; i++)
+            for (int i = 0; i < diameter; i++)
                 sum += (srcp[i][x] + offset) * weights[i];
 
             dstp[x] = sum;
         }
 
-        for (int i = 0; i < length - 1; i++)
+        for (int i = 0; i < diameter - 1; i++)
             srcp[i] = srcp[i + 1];
 
-        srcp[length - 1] += stride * (y < height - rad - 1 ? 1 : -1);
+        srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
         dstp += stride;
     }
 
     delete[] srcp;
 }
 
-static void genConvH(const float * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int rad) {
-    float * VS_RESTRICT srcp = new float[width + rad * 2];
+static void gaussianBlurHorizontal(const float * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int radius) {
+    float * VS_RESTRICT srcp = new float[width + radius * 2];
     float * srcpSaved = srcp;
-    srcp += rad;
+    srcp += radius;
 
     for (int y = 0; y < height; y++) {
         memcpy(srcp, _srcp, width * sizeof(float));
-        for (int i = 1; i <= rad; i++) {
+        for (int i = 1; i <= radius; i++) {
             srcp[-i] = _srcp[i];
             srcp[width - 1 + i] = _srcp[width - 1 - i];
         }
@@ -398,8 +404,8 @@ static void genConvH(const float * _srcp, float * VS_RESTRICT dstp, const float 
         for (int x = 0; x < width; x++) {
             float sum = 0.f;
 
-            for (int i = -rad; i <= rad; i++)
-                sum += srcp[x + i] * weights[i + rad];
+            for (int i = -radius; i <= radius; i++)
+                sum += srcp[x + i] * weights[i + radius];
 
             dstp[x] = sum;
         }
@@ -669,7 +675,7 @@ void discretizeDM<float>(const float * dimg, float * VS_RESTRICT dstp, const int
 }
 
 template<typename T>
-static void process(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT fa[3], Stack & VS_RESTRICT stack, const TCannyData * d, const VSAPI * vsapi) {
+static void process(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT buffer[3], Stack & VS_RESTRICT stack, const TCannyData * d, const VSAPI * vsapi) {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const int width = vsapi->getFrameWidth(src, plane);
@@ -679,28 +685,28 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRIC
             T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
             const float offset = (d->vi->format->sampleType == stInteger || plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.f : 0.5f;
 
-            d->genConvV(srcp, fa[1], d->weights, width, height, stride, d->grad, offset);
-            genConvH(fa[1], fa[0], d->weights, width, height, stride, d->grad);
+            d->gaussianBlurVertical(srcp, buffer[1], d->weights, width, height, stride, d->radius, offset);
+            gaussianBlurHorizontal(buffer[1], buffer[0], d->weights, width, height, stride, d->radius);
 
             if (d->mode != -1) {
-                detectEdge(fa[0], fa[1], fa[2], width, height, stride, d->mode, d->op);
+                detectEdge(buffer[0], buffer[1], buffer[2], width, height, stride, d->mode, d->op);
                 if (!((d->mode & 1) || d->nms == 0))
-                    nonMaximumSuppression(fa[0], fa[1], fa[2], width, height, stride, d->nms);
+                    nonMaximumSuppression(buffer[0], buffer[1], buffer[2], width, height, stride, d->nms);
             }
 
             if (!(d->mode & 1))
-                hysteresis(fa[0], stack, width, height, stride, d->t_h, d->t_l);
+                hysteresis(buffer[0], stack, width, height, stride, d->t_h, d->t_l);
 
             if (d->mode == -1)
-                outputGB<T>(fa[0], dstp, width, height, stride, d->peak, offset, d->lower[plane], d->upper[plane]);
+                outputGB<T>(buffer[0], dstp, width, height, stride, d->peak, offset, d->lower[plane], d->upper[plane]);
             else if (d->mode == 0)
-                binarizeCE<T>(fa[0], dstp, width, height, stride, d->t_h, d->peak, d->lower[plane], d->upper[plane]);
+                binarizeCE<T>(buffer[0], dstp, width, height, stride, d->t_h, d->peak, d->lower[plane], d->upper[plane]);
             else if (d->mode == 1)
-                discretizeGM<T>(fa[1], dstp, width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
+                discretizeGM<T>(buffer[1], dstp, width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
             else if (d->mode == 2)
-                discretizeDM_T<T>(fa[0], fa[2], dstp, width, height, stride, d->t_h, d->bins, offset, d->lower[plane]);
+                discretizeDM_T<T>(buffer[0], buffer[2], dstp, width, height, stride, d->t_h, d->bins, offset, d->lower[plane]);
             else
-                discretizeDM<T>(fa[2], dstp, width, height, stride, d->bins, offset);
+                discretizeDM<T>(buffer[2], dstp, width, height, stride, d->bins, offset);
         }
     }
 }
@@ -725,11 +731,11 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
         const int pl[] { 0, 1, 2 };
         VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
 
-        float * fa[3];
+        float * buffer[3];
         for (int i = 0; i < 3; i++) {
-            fa[i] = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
-            if (!fa[i]) {
-                vsapi->setFilterError("TCanny: malloc failure (fa)", frameCtx);
+            buffer[i] = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
+            if (!buffer[i]) {
+                vsapi->setFilterError("TCanny: malloc failure (buffer)", frameCtx);
                 vsapi->freeFrame(src);
                 vsapi->freeFrame(dst);
                 return nullptr;
@@ -750,16 +756,16 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
         if (d->vi->format->sampleType == stInteger) {
             if (d->vi->format->bitsPerSample == 8)
-                process<uint8_t>(src, dst, fa, stack, d, vsapi);
+                process<uint8_t>(src, dst, buffer, stack, d, vsapi);
             else
-                process<uint16_t>(src, dst, fa, stack, d, vsapi);
+                process<uint16_t>(src, dst, buffer, stack, d, vsapi);
         } else {
-            process<float>(src, dst, fa, stack, d, vsapi);
+            process<float>(src, dst, buffer, stack, d, vsapi);
         }
 
         vsapi->freeFrame(src);
         for (int i = 0; i < 3; i++)
-            vs_aligned_free(fa[i]);
+            vs_aligned_free(buffer[i]);
         vs_aligned_free(stack.map);
         vs_aligned_free(stack.pos);
         return dst;
@@ -872,9 +878,9 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         d.peak = d.bins - 1;
 
         if (d.vi->format->bitsPerSample == 8)
-            d.genConvV = genConvV_uint8;
+            d.gaussianBlurVertical = gaussianBlurVertical_uint8;
         else
-            d.genConvV = genConvV_uint16;
+            d.gaussianBlurVertical = gaussianBlurVertical_uint16;
     } else {
         d.t_h /= 255.f;
         d.t_l /= 255.f;
@@ -892,10 +898,10 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
             }
         }
 
-        d.genConvV = genConvV_float;
+        d.gaussianBlurVertical = gaussianBlurVertical_float;
     }
 
-    d.weights = gaussianWeights(d.sigma, &d.grad);
+    d.weights = gaussianWeights(d.sigma, &d.radius);
     if (!d.weights) {
         vsapi->setError(out, "TCanny: malloc failure (weights)");
         vsapi->freeNode(d.node);
