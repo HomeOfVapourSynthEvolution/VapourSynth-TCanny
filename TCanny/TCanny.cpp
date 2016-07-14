@@ -45,6 +45,10 @@ struct TCannyData {
     int peak;
     float lower[3], upper[3];
     void (*gaussianBlurVertical)(const uint8_t * srcp, float * dstp, const float * weights, const int width, const int height, const int stride, const int radius, const float offset);
+    void (*operators)(const float * srcpp, const float * srcp, const float * srcpn, float * dx, float * dy, const int x);
+#ifdef VS_TARGET_CPU_X86
+    void (*operatorsVec)(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x);
+#endif
 };
 
 struct Stack {
@@ -85,6 +89,26 @@ static float * gaussianWeights(const float sigma, int * radius) {
         weights[k] /= sum;
 
     return weights;
+}
+
+static void opTritical(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
+    *dx = srcp[x + 1] - srcp[x - 1];
+    *dy = srcpp[x] - srcpn[x];
+}
+
+static void opZhou(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
+    *dx = (srcpp[x + 1] + srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - srcp[x - 1] - srcpn[x - 1]) / 2.f;
+    *dy = (srcpp[x - 1] + srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - srcpn[x] - srcpn[x + 1]) / 2.f;
+}
+
+static void opSobel(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
+    *dx = srcpp[x + 1] + 2.f * srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - 2.f * srcp[x - 1] - srcpn[x - 1];
+    *dy = srcpp[x - 1] + 2.f * srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - 2.f * srcpn[x] - srcpn[x + 1];
+}
+
+static void opScharr(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
+    *dx = 3.f * srcpp[x + 1] + 10.f * srcp[x + 1] + 3.f * srcpn[x + 1] - 3.f * srcpp[x - 1] - 10.f * srcp[x - 1] - 3.f * srcpn[x - 1];
+    *dy = 3.f * srcpp[x - 1] + 10.f * srcpp[x] + 3.f * srcpp[x + 1] - 3.f * srcpn[x - 1] - 10.f * srcpn[x] - 3.f * srcpn[x + 1];
 }
 
 #ifdef VS_TARGET_CPU_X86
@@ -222,7 +246,37 @@ static void gaussianBlurHorizontal(const float * __srcp, float * dstp, const flo
     delete[] srcpSaved;
 }
 
-static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const int mode, const int op) {
+static void opTritical(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
+                       const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
+    *dx = Vec8f().load(srcp + x + 1) - Vec8f().load_a(srcp + x - 1);
+    *dy = Vec8f().load(srcpp + x) - Vec8f().load(srcpn + x);
+}
+
+static void opZhou(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
+                   const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
+    *dx = (Vec8f().load(srcpp + x + 1) + Vec8f().load(srcp + x + 1) + Vec8f().load(srcpn + x + 1)
+        - Vec8f().load_a(srcpp + x - 1) - Vec8f().load_a(srcp + x - 1) - Vec8f().load_a(srcpn + x - 1)) * pointFive;
+    *dy = (Vec8f().load_a(srcpp + x - 1) + Vec8f().load(srcpp + x) + Vec8f().load(srcpp + x + 1)
+        - Vec8f().load_a(srcpn + x - 1) - Vec8f().load(srcpn + x) - Vec8f().load(srcpn + x + 1)) * pointFive;
+}
+
+static void opSobel(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
+                    const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
+    *dx = Vec8f().load(srcpp + x + 1) + mul_add(two, Vec8f().load(srcp + x + 1), Vec8f().load(srcpn + x + 1))
+        - Vec8f().load_a(srcpp + x - 1) - mul_add(two, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcpn + x - 1));
+    *dy = Vec8f().load_a(srcpp + x - 1) + mul_add(two, Vec8f().load(srcpp + x), Vec8f().load(srcpp + x + 1))
+        - Vec8f().load_a(srcpn + x - 1) - mul_add(two, Vec8f().load(srcpn + x), Vec8f().load(srcpn + x + 1));
+}
+
+static void opScharr(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
+                     const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
+    *dx = mul_add(three, Vec8f().load(srcpp + x + 1), mul_add(ten, Vec8f().load(srcp + x + 1), three * Vec8f().load(srcpn + x + 1)))
+        - mul_add(three, Vec8f().load_a(srcpp + x - 1), mul_add(ten, Vec8f().load_a(srcp + x - 1), three * Vec8f().load_a(srcpn + x - 1)));
+    *dy = mul_add(three, Vec8f().load_a(srcpp + x - 1), mul_add(ten, Vec8f().load(srcpp + x), three * Vec8f().load(srcpp + x + 1)))
+        - mul_add(three, Vec8f().load_a(srcpn + x - 1), mul_add(ten, Vec8f().load(srcpn + x), three * Vec8f().load(srcpn + x + 1)));
+}
+
+static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const TCannyData * d) {
     const int regularPart = (width % 8 ? width : width - 1) & -8;
     const Vec8f zero { 0.f };
     const Vec8f pointFive { 0.5f };
@@ -234,7 +288,9 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
     memset(_gimg, 0, stride * height * sizeof(float));
     memset(_dimg, 0, stride * height * sizeof(float));
 
-    float * VS_RESTRICT srcp = _srcp + stride;
+    float * VS_RESTRICT srcpp = _srcp;
+    float * VS_RESTRICT srcp = srcpp + stride;
+    float * VS_RESTRICT srcpn = srcp + stride;
     float * VS_RESTRICT gimg = _gimg + stride;
     float * VS_RESTRICT dimg = _dimg + stride;
 
@@ -244,29 +300,11 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
         for (x = 1; x < regularPart; x += 8) {
             Vec8f dx, dy;
 
-            if (op == 0) {
-                dx = Vec8f().load(srcp + x + 1) - Vec8f().load_a(srcp + x - 1);
-                dy = Vec8f().load(srcp + x - stride) - Vec8f().load(srcp + x + stride);
-            } else if (op == 1) {
-                dx = (Vec8f().load(srcp + x - stride + 1) + Vec8f().load(srcp + x + 1) + Vec8f().load(srcp + x + stride + 1)
-                    - Vec8f().load_a(srcp + x - stride - 1) - Vec8f().load_a(srcp + x - 1) - Vec8f().load_a(srcp + x + stride - 1)) * pointFive;
-                dy = (Vec8f().load_a(srcp + x - stride - 1) + Vec8f().load(srcp + x - stride) + Vec8f().load(srcp + x - stride + 1)
-                    - Vec8f().load_a(srcp + x + stride - 1) - Vec8f().load(srcp + x + stride) - Vec8f().load(srcp + x + stride + 1)) * pointFive;
-            } else if (op == 2) {
-                dx = Vec8f().load(srcp + x - stride + 1) + mul_add(two, Vec8f().load(srcp + x + 1), Vec8f().load(srcp + x + stride + 1))
-                    - Vec8f().load_a(srcp + x - stride - 1) - mul_add(two, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcp + x + stride - 1));
-                dy = Vec8f().load_a(srcp + x - stride - 1) + mul_add(two, Vec8f().load(srcp + x - stride), Vec8f().load(srcp + x - stride + 1))
-                    - Vec8f().load_a(srcp + x + stride - 1) - mul_add(two, Vec8f().load(srcp + x + stride), Vec8f().load(srcp + x + stride + 1));
-            } else {
-                dx = mul_add(three, Vec8f().load(srcp + x - stride + 1), mul_add(ten, Vec8f().load(srcp + x + 1), three * Vec8f().load(srcp + x + stride + 1)))
-                    - mul_add(three, Vec8f().load_a(srcp + x - stride - 1), mul_add(ten, Vec8f().load_a(srcp + x - 1), three * Vec8f().load_a(srcp + x + stride - 1)));
-                dy = mul_add(three, Vec8f().load_a(srcp + x - stride - 1), mul_add(ten, Vec8f().load(srcp + x - stride), three * Vec8f().load(srcp + x - stride + 1)))
-                    - mul_add(three, Vec8f().load_a(srcp + x + stride - 1), mul_add(ten, Vec8f().load(srcp + x + stride), three * Vec8f().load(srcp + x + stride + 1)));
-            }
+            d->operatorsVec(srcpp, srcp, srcpn, &dx, &dy, pointFive, two, three, ten, x);
 
             sqrt(mul_add(dx, dx, dy * dy)).store(gimg + x);
 
-            if (mode != 1) {
+            if (d->mode != 1) {
                 const Vec8f dr = atan2(dy, dx);
                 (dr + select(dr < zero, PI, zero)).store(dimg + x);
             }
@@ -275,29 +313,19 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
         for (; x < width - 1; x++) {
             float dx, dy;
 
-            if (op == 0) {
-                dx = srcp[x + 1] - srcp[x - 1];
-                dy = srcp[x - stride] - srcp[x + stride];
-            } else if (op == 1) {
-                dx = (srcp[x - stride + 1] + srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - srcp[x - 1] - srcp[x + stride - 1]) / 2.f;
-                dy = (srcp[x - stride - 1] + srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - srcp[x + stride] - srcp[x + stride + 1]) / 2.f;
-            } else if (op == 2) {
-                dx = srcp[x - stride + 1] + 2.f * srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - 2.f * srcp[x - 1] - srcp[x + stride - 1];
-                dy = srcp[x - stride - 1] + 2.f * srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - 2.f * srcp[x + stride] - srcp[x + stride + 1];
-            } else {
-                dx = 3.f * srcp[x - stride + 1] + 10.f * srcp[x + 1] + 3.f * srcp[x + stride + 1] - 3.f * srcp[x - stride - 1] - 10.f * srcp[x - 1] - 3.f * srcp[x + stride - 1];
-                dy = 3.f * srcp[x - stride - 1] + 10.f * srcp[x - stride] + 3.f * srcp[x - stride + 1] - 3.f * srcp[x + stride - 1] - 10.f * srcp[x + stride] - 3.f * srcp[x + stride + 1];
-            }
+            d->operators(srcpp, srcp, srcpn, &dx, &dy, x);
 
             gimg[x] = std::sqrt(dx * dx + dy * dy);
 
-            if (mode != 1) {
+            if (d->mode != 1) {
                 const float dr = std::atan2(dy, dx);
                 dimg[x] = dr + (dr < 0.f ? M_PIF : 0.f);
             }
         }
 
+        srcpp += stride;
         srcp += stride;
+        srcpn += stride;
         gimg += stride;
         dimg += stride;
     }
@@ -417,11 +445,13 @@ static void gaussianBlurHorizontal(const float * _srcp, float * VS_RESTRICT dstp
     delete[] srcpSaved;
 }
 
-static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const int mode, const int op) {
+static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const TCannyData * d) {
     memset(_gimg, 0, stride * height * sizeof(float));
     memset(_dimg, 0, stride * height * sizeof(float));
 
-    float * VS_RESTRICT srcp = _srcp + stride;
+    float * VS_RESTRICT srcpp = _srcp;
+    float * VS_RESTRICT srcp = srcpp + stride;
+    float * VS_RESTRICT srcpn = srcp + stride;
     float * VS_RESTRICT gimg = _gimg + stride;
     float * VS_RESTRICT dimg = _dimg + stride;
 
@@ -429,29 +459,19 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
         for (int x = 1; x < width - 1; x++) {
             float dx, dy;
 
-            if (op == 0) {
-                dx = srcp[x + 1] - srcp[x - 1];
-                dy = srcp[x - stride] - srcp[x + stride];
-            } else if (op == 1) {
-                dx = (srcp[x - stride + 1] + srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - srcp[x - 1] - srcp[x + stride - 1]) / 2.f;
-                dy = (srcp[x - stride - 1] + srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - srcp[x + stride] - srcp[x + stride + 1]) / 2.f;
-            } else if (op == 2) {
-                dx = srcp[x - stride + 1] + 2.f * srcp[x + 1] + srcp[x + stride + 1] - srcp[x - stride - 1] - 2.f * srcp[x - 1] - srcp[x + stride - 1];
-                dy = srcp[x - stride - 1] + 2.f * srcp[x - stride] + srcp[x - stride + 1] - srcp[x + stride - 1] - 2.f * srcp[x + stride] - srcp[x + stride + 1];
-            } else {
-                dx = 3.f * srcp[x - stride + 1] + 10.f * srcp[x + 1] + 3.f * srcp[x + stride + 1] - 3.f * srcp[x - stride - 1] - 10.f * srcp[x - 1] - 3.f * srcp[x + stride - 1];
-                dy = 3.f * srcp[x - stride - 1] + 10.f * srcp[x - stride] + 3.f * srcp[x - stride + 1] - 3.f * srcp[x + stride - 1] - 10.f * srcp[x + stride] - 3.f * srcp[x + stride + 1];
-            }
+            d->operators(srcpp, srcp, srcpn, &dx, &dy, x);
 
             gimg[x] = std::sqrt(dx * dx + dy * dy);
 
-            if (mode != 1) {
+            if (d->mode != 1) {
                 const float dr = std::atan2(dy, dx);
                 dimg[x] = dr + (dr < 0.f ? M_PIF : 0.f);
             }
         }
 
+        srcpp += stride;
         srcp += stride;
+        srcpn += stride;
         gimg += stride;
         dimg += stride;
     }
@@ -689,7 +709,7 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRIC
             gaussianBlurHorizontal(buffer[1], buffer[0], d->weights, width, height, stride, d->radius);
 
             if (d->mode != -1) {
-                detectEdge(buffer[0], buffer[1], buffer[2], width, height, stride, d->mode, d->op);
+                detectEdge(buffer[0], buffer[1], buffer[2], width, height, stride, d);
                 if (!((d->mode & 1) || d->nms == 0))
                     nonMaximumSuppression(buffer[0], buffer[1], buffer[2], width, height, stride, d->nms);
             }
@@ -900,6 +920,26 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
         d.gaussianBlurVertical = gaussianBlurVertical_float;
     }
+
+    if (d.op == 0)
+        d.operators = opTritical;
+    else if (d.op == 1)
+        d.operators = opZhou;
+    else if (d.op == 2)
+        d.operators = opSobel;
+    else
+        d.operators = opScharr;
+
+#ifdef VS_TARGET_CPU_X86
+    if (d.op == 0)
+        d.operatorsVec = opTritical;
+    else if (d.op == 1)
+        d.operatorsVec = opZhou;
+    else if (d.op == 2)
+        d.operatorsVec = opSobel;
+    else
+        d.operatorsVec = opScharr;
+#endif
 
     d.weights = gaussianWeights(d.sigma, &d.radius);
     if (!d.weights) {
