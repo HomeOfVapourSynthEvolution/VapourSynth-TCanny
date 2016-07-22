@@ -39,15 +39,15 @@ struct TCannyData {
     float sigma, t_h, t_l, gmmax;
     int nms, mode, op;
     bool process[3];
-    int radius, bins;
+    int radius, radiusAlign, bins;
     float * weights;
     float magnitude;
     int peak;
     float lower[3], upper[3];
-    void (*gaussianBlurVertical)(const uint8_t * srcp, float * dstp, const float * weights, const int width, const int height, const int stride, const int radius, const float offset);
     void (*operators)(const float * srcpp, const float * srcp, const float * srcpn, float * dx, float * dy, const int x);
 #ifdef VS_TARGET_CPU_X86
-    void (*operatorsVec)(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x);
+    void (*gaussianBlurVertical)(const uint8_t * srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride, const int radius, const float offset);
+    void (*operatorsVec)(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x);
 #endif
 };
 
@@ -112,178 +112,164 @@ static void opScharr(const float * srcpp, const float * srcp, const float * srcp
 }
 
 #ifdef VS_TARGET_CPU_X86
-static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride,
+static void gaussianBlurHorizontal(float * _srcp, float * dstp, const float * weights, const int width, const int radius) {
+    for (int i = 1; i <= radius; i++) {
+        _srcp[-i] = _srcp[i];
+        _srcp[width - 1 + i] = _srcp[width - 1 - i];
+    }
+
+    for (int x = 0; x < width; x += 8) {
+        Vec8f sum { 0.f };
+
+        for (int i = -radius; i <= radius; i++) {
+            const Vec8f srcp = Vec8f().load(_srcp + x + i);
+            sum = mul_add(srcp, weights[i], sum);
+        }
+
+        sum.store_a(dstp + x);
+    }
+}
+
+static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride,
                                        const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const uint8_t ** _srcp = new const uint8_t *[diameter];
-    const Vec8f zero { 0.f };
 
-    for (int i = -radius; i <= radius; i++)
-        _srcp[i + radius] = __srcp + stride * std::abs(i);
+    _srcp[radius] = __srcp;
+    for (int i = 1; i <= radius; i++)
+        _srcp[radius - i] = _srcp[radius + i] = __srcp + stride * i;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
-            Vec8f sum = zero;
+            Vec8f sum { 0.f };
 
             for (int i = 0; i < diameter; i++) {
-                const Vec16uc srcp_16uc = Vec16uc().load(_srcp[i] + x);
-                const Vec8s srcp_8s = Vec8s(extend_low(srcp_16uc));
-                const Vec8i srcp_8i = Vec8i(extend_low(srcp_8s), extend_high(srcp_8s));
+#if defined(__AVX2__)
+                const Vec8i srcp_8i = _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x)));
+#elif defined(__SSE4_1__)
+                const Vec8i srcp_8i = Vec8i(_mm_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x))),
+                                            _mm_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x + 4))));
+#else
+                const Vec16uc srcp_16uc { _mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x)) };
+                const Vec8us srcp_8us = extend_low(srcp_16uc);
+                const Vec8i srcp_8i = Vec8i(extend_low(srcp_8us), extend_high(srcp_8us));
+#endif
                 const Vec8f srcp = to_float(srcp_8i);
-                const Vec8f weights { _weights[i] };
-                sum = mul_add(srcp, weights, sum);
+                sum = mul_add(srcp, weights[i], sum);
             }
 
-            sum.store_a(dstp + x);
+            sum.store_a(buffer + x);
         }
+
+        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-
-        _srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
+        _srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
         dstp += stride;
     }
 
     delete[] _srcp;
 }
 
-static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride,
+static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride,
                                         const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const uint16_t ** _srcp = new const uint16_t *[diameter];
-    const Vec8f zero { 0.f };
 
-    for (int i = -radius; i <= radius; i++)
-        _srcp[i + radius] = reinterpret_cast<const uint16_t *>(__srcp) + stride * std::abs(i);
+    _srcp[radius] = reinterpret_cast<const uint16_t *>(__srcp);
+    for (int i = 1; i <= radius; i++)
+        _srcp[radius - i] = _srcp[radius + i] = reinterpret_cast<const uint16_t *>(__srcp) + stride * i;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
-            Vec8f sum = zero;
+            Vec8f sum { 0.f };
 
             for (int i = 0; i < diameter; i++) {
                 const Vec8us srcp_8us = Vec8us().load_a(_srcp[i] + x);
+#if defined(__AVX2__)
+                const Vec8i srcp_8i = _mm256_cvtepu16_epi32(srcp_8us);
+#else
                 const Vec8i srcp_8i = Vec8i(extend_low(srcp_8us), extend_high(srcp_8us));
+#endif
                 const Vec8f srcp = to_float(srcp_8i);
-                const Vec8f weights { _weights[i] };
-                sum = mul_add(srcp, weights, sum);
+                sum = mul_add(srcp, weights[i], sum);
             }
 
-            sum.store_a(dstp + x);
+            sum.store_a(buffer + x);
         }
+
+        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-
-        _srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
+        _srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
         dstp += stride;
     }
 
     delete[] _srcp;
 }
 
-static void gaussianBlurVertical_float(const uint8_t * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride,
-                                       const int radius, const float _offset) {
+static void gaussianBlurVertical_float(const uint8_t * __srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride,
+                                       const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const float ** _srcp = new const float *[diameter];
-    const Vec8f zero { 0.f };
-    const Vec8f offset { _offset };
 
-    for (int i = -radius; i <= radius; i++)
-        _srcp[i + radius] = reinterpret_cast<const float *>(__srcp) + stride * std::abs(i);
+    _srcp[radius] = reinterpret_cast<const float *>(__srcp);
+    for (int i = 1; i <= radius; i++)
+        _srcp[radius - i] = _srcp[radius + i] = reinterpret_cast<const float *>(__srcp) + stride * i;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
-            Vec8f sum = zero;
+            Vec8f sum { 0.f };
 
             for (int i = 0; i < diameter; i++) {
                 const Vec8f srcp = Vec8f().load_a(_srcp[i] + x);
-                const Vec8f weights { _weights[i] };
-                sum = mul_add(srcp + offset, weights, sum);
+                sum = mul_add(srcp + offset, weights[i], sum);
             }
 
-            sum.store_a(dstp + x);
+            sum.store_a(buffer + x);
         }
+
+        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-
-        _srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
+        _srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
         dstp += stride;
     }
 
     delete[] _srcp;
 }
 
-static void gaussianBlurHorizontal(const float * __srcp, float * dstp, const float * _weights, const int width, const int height, const int stride, const int radius) {
-    float * VS_RESTRICT _srcp = new float[stride + radius * 2];
-    float * srcpSaved = _srcp;
-    _srcp += radius;
-    const Vec8f zero { 0.f };
-
-    for (int y = 0; y < height; y++) {
-        memcpy(_srcp, __srcp, width * sizeof(float));
-        for (int i = 1; i <= radius; i++) {
-            _srcp[-i] = __srcp[i];
-            _srcp[width - 1 + i] = __srcp[width - 1 - i];
-        }
-
-        for (int x = 0; x < width; x += 8) {
-            Vec8f sum = zero;
-
-            for (int i = -radius; i <= radius; i++) {
-                const Vec8f srcp = Vec8f().load(_srcp + x + i);
-                const Vec8f weights { _weights[i + radius] };
-                sum = mul_add(srcp, weights, sum);
-            }
-
-            sum.store_a(dstp + x);
-        }
-
-        __srcp += stride;
-        dstp += stride;
-    }
-
-    delete[] srcpSaved;
-}
-
-static void opTritical(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
-                       const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
+static void opTritical(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
     *dx = Vec8f().load(srcp + x + 1) - Vec8f().load_a(srcp + x - 1);
     *dy = Vec8f().load(srcpp + x) - Vec8f().load(srcpn + x);
 }
 
-static void opZhou(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
-                   const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
+static void opZhou(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
     *dx = (Vec8f().load(srcpp + x + 1) + Vec8f().load(srcp + x + 1) + Vec8f().load(srcpn + x + 1)
-        - Vec8f().load_a(srcpp + x - 1) - Vec8f().load_a(srcp + x - 1) - Vec8f().load_a(srcpn + x - 1)) * pointFive;
+        - Vec8f().load_a(srcpp + x - 1) - Vec8f().load_a(srcp + x - 1) - Vec8f().load_a(srcpn + x - 1)) * 0.5f;
     *dy = (Vec8f().load_a(srcpp + x - 1) + Vec8f().load(srcpp + x) + Vec8f().load(srcpp + x + 1)
-        - Vec8f().load_a(srcpn + x - 1) - Vec8f().load(srcpn + x) - Vec8f().load(srcpn + x + 1)) * pointFive;
+        - Vec8f().load_a(srcpn + x - 1) - Vec8f().load(srcpn + x) - Vec8f().load(srcpn + x + 1)) * 0.5f;
 }
 
-static void opSobel(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
-                    const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
-    *dx = Vec8f().load(srcpp + x + 1) + mul_add(two, Vec8f().load(srcp + x + 1), Vec8f().load(srcpn + x + 1))
-        - Vec8f().load_a(srcpp + x - 1) - mul_add(two, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcpn + x - 1));
-    *dy = Vec8f().load_a(srcpp + x - 1) + mul_add(two, Vec8f().load(srcpp + x), Vec8f().load(srcpp + x + 1))
-        - Vec8f().load_a(srcpn + x - 1) - mul_add(two, Vec8f().load(srcpn + x), Vec8f().load(srcpn + x + 1));
+static void opSobel(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
+    *dx = Vec8f().load(srcpp + x + 1) + mul_add(2.f, Vec8f().load(srcp + x + 1), Vec8f().load(srcpn + x + 1))
+        - Vec8f().load_a(srcpp + x - 1) - mul_add(2.f, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcpn + x - 1));
+    *dy = Vec8f().load_a(srcpp + x - 1) + mul_add(2.f, Vec8f().load(srcpp + x), Vec8f().load(srcpp + x + 1))
+        - Vec8f().load_a(srcpn + x - 1) - mul_add(2.f, Vec8f().load(srcpn + x), Vec8f().load(srcpn + x + 1));
 }
 
-static void opScharr(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy,
-                     const Vec8f & pointFive, const Vec8f & two, const Vec8f & three, const Vec8f & ten, const int x) {
-    *dx = mul_add(three, Vec8f().load(srcpp + x + 1), mul_add(ten, Vec8f().load(srcp + x + 1), three * Vec8f().load(srcpn + x + 1)))
-        - mul_add(three, Vec8f().load_a(srcpp + x - 1), mul_add(ten, Vec8f().load_a(srcp + x - 1), three * Vec8f().load_a(srcpn + x - 1)));
-    *dy = mul_add(three, Vec8f().load_a(srcpp + x - 1), mul_add(ten, Vec8f().load(srcpp + x), three * Vec8f().load(srcpp + x + 1)))
-        - mul_add(three, Vec8f().load_a(srcpn + x - 1), mul_add(ten, Vec8f().load(srcpn + x), three * Vec8f().load(srcpn + x + 1)));
+static void opScharr(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
+    *dx = mul_add(3.f, Vec8f().load(srcpp + x + 1), mul_add(10.f, Vec8f().load(srcp + x + 1), 3.f * Vec8f().load(srcpn + x + 1)))
+        - mul_add(3.f, Vec8f().load_a(srcpp + x - 1), mul_add(10.f, Vec8f().load_a(srcp + x - 1), 3.f * Vec8f().load_a(srcpn + x - 1)));
+    *dy = mul_add(3.f, Vec8f().load_a(srcpp + x - 1), mul_add(10.f, Vec8f().load(srcpp + x), 3.f * Vec8f().load(srcpp + x + 1)))
+        - mul_add(3.f, Vec8f().load_a(srcpn + x - 1), mul_add(10.f, Vec8f().load(srcpn + x), 3.f * Vec8f().load(srcpn + x + 1)));
 }
 
 static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const TCannyData * d) {
     const int regularPart = (width % 8 ? width : width - 1) & -8;
-    const Vec8f zero { 0.f };
-    const Vec8f pointFive { 0.5f };
-    const Vec8f two { 2.f };
-    const Vec8f three { 3.f };
-    const Vec8f ten { 10.f };
-    const Vec8f PI { M_PIF };
 
     memset(_gimg, 0, stride * height * sizeof(float));
     memset(_dimg, 0, stride * height * sizeof(float));
@@ -300,13 +286,13 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
         for (x = 1; x < regularPart; x += 8) {
             Vec8f dx, dy;
 
-            d->operatorsVec(srcpp, srcp, srcpn, &dx, &dy, pointFive, two, three, ten, x);
+            d->operatorsVec(srcpp, srcp, srcpn, &dx, &dy, x);
 
             sqrt(mul_add(dx, dx, dy * dy)).store(gimg + x);
 
             if (d->mode != 1) {
                 const Vec8f dr = atan2(dy, dx);
-                (dr + select(dr < zero, PI, zero)).store(dimg + x);
+                if_add(dr < 0.f, dr, M_PIF).store(dimg + x);
             }
         }
 
@@ -333,13 +319,31 @@ static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int wi
     memcpy(_srcp, _gimg, stride * height * sizeof(float));
 }
 #else
-static void gaussianBlurVertical_uint8(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride,
-                                       const int radius, const float offset) {
-    const int diameter = radius * 2 + 1;
-    const uint8_t ** srcp = new const uint8_t *[diameter];
+static void gaussianBlurHorizontal(float * VS_RESTRICT srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int radius) {
+    for (int i = 1; i <= radius; i++) {
+        srcp[-i] = srcp[i];
+        srcp[width - 1 + i] = srcp[width - 1 - i];
+    }
 
-    for (int i = -radius; i <= radius; i++)
-        srcp[i + radius] = _srcp + stride * std::abs(i);
+    for (int x = 0; x < width; x++) {
+        float sum = 0.f;
+
+        for (int i = -radius; i <= radius; i++)
+            sum += srcp[x + i] * weights[i];
+
+        dstp[x] = sum;
+    }
+}
+
+template<typename T>
+static void gaussianBlurVertical(const T * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT dstp, const float * weights,
+                                 const int width, const int height, const int stride, const int radius, const float offset) {
+    const int diameter = radius * 2 + 1;
+    const T ** srcp = new const T *[diameter];
+
+    srcp[radius] = _srcp;
+    for (int i = 1; i <= radius; i++)
+        srcp[radius - i] = srcp[radius + i] = _srcp + stride * i;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -348,54 +352,29 @@ static void gaussianBlurVertical_uint8(const uint8_t * _srcp, float * VS_RESTRIC
             for (int i = 0; i < diameter; i++)
                 sum += srcp[i][x] * weights[i];
 
-            dstp[x] = sum;
+            buffer[x] = sum;
         }
+
+        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             srcp[i] = srcp[i + 1];
-
-        srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
+        srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
         dstp += stride;
     }
 
     delete[] srcp;
 }
 
-static void gaussianBlurVertical_uint16(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride,
-                                        const int radius, const float offset) {
-    const int diameter = radius * 2 + 1;
-    const uint16_t ** srcp = new const uint16_t *[diameter];
-
-    for (int i = -radius; i <= radius; i++)
-        srcp[i + radius] = reinterpret_cast<const uint16_t *>(_srcp) + stride * std::abs(i);
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
-
-            for (int i = 0; i < diameter; i++)
-                sum += srcp[i][x] * weights[i];
-
-            dstp[x] = sum;
-        }
-
-        for (int i = 0; i < diameter - 1; i++)
-            srcp[i] = srcp[i + 1];
-
-        srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
-        dstp += stride;
-    }
-
-    delete[] srcp;
-}
-
-static void gaussianBlurVertical_float(const uint8_t * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride,
-                                       const int radius, const float offset) {
+template<>
+void gaussianBlurVertical<float>(const float * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT dstp, const float * weights,
+                                 const int width, const int height, const int stride, const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const float ** srcp = new const float *[diameter];
 
-    for (int i = -radius; i <= radius; i++)
-        srcp[i + radius] = reinterpret_cast<const float *>(_srcp) + stride * std::abs(i);
+    srcp[radius] = _srcp;
+    for (int i = 1; i <= radius; i++)
+        srcp[radius - i] = srcp[radius + i] = _srcp + stride * i;
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -404,45 +383,18 @@ static void gaussianBlurVertical_float(const uint8_t * _srcp, float * VS_RESTRIC
             for (int i = 0; i < diameter; i++)
                 sum += (srcp[i][x] + offset) * weights[i];
 
-            dstp[x] = sum;
+            buffer[x] = sum;
         }
+
+        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             srcp[i] = srcp[i + 1];
-
-        srcp[diameter - 1] += stride * (y < height - radius - 1 ? 1 : -1);
+        srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
         dstp += stride;
     }
 
     delete[] srcp;
-}
-
-static void gaussianBlurHorizontal(const float * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int stride, const int radius) {
-    float * VS_RESTRICT srcp = new float[width + radius * 2];
-    float * srcpSaved = srcp;
-    srcp += radius;
-
-    for (int y = 0; y < height; y++) {
-        memcpy(srcp, _srcp, width * sizeof(float));
-        for (int i = 1; i <= radius; i++) {
-            srcp[-i] = _srcp[i];
-            srcp[width - 1 + i] = _srcp[width - 1 - i];
-        }
-
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
-
-            for (int i = -radius; i <= radius; i++)
-                sum += srcp[x + i] * weights[i + radius];
-
-            dstp[x] = sum;
-        }
-
-        _srcp += stride;
-        dstp += stride;
-    }
-
-    delete[] srcpSaved;
 }
 
 static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const TCannyData * d) {
@@ -695,24 +647,27 @@ void discretizeDM<float>(const float * dimg, float * VS_RESTRICT dstp, const int
 }
 
 template<typename T>
-static void process(const VSFrameRef * src, VSFrameRef * dst, float * VS_RESTRICT buffer[3], Stack & VS_RESTRICT stack, const TCannyData * d, const VSAPI * vsapi) {
+static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer[3], float * blurBuffer, Stack & stack, const TCannyData * d, const VSAPI * vsapi) {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const int width = vsapi->getFrameWidth(src, plane);
             const int height = vsapi->getFrameHeight(src, plane);
             const int stride = vsapi->getStride(src, plane) / sizeof(T);
             const uint8_t * srcp = vsapi->getReadPtr(src, plane);
-            T * VS_RESTRICT dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
+            T * dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
             const float offset = (d->vi->format->sampleType == stInteger || plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.f : 0.5f;
 
-            d->gaussianBlurVertical(srcp, buffer[1], d->weights, width, height, stride, d->radius, offset);
-            gaussianBlurHorizontal(buffer[1], buffer[0], d->weights, width, height, stride, d->radius);
+#ifdef VS_TARGET_CPU_X86
+            d->gaussianBlurVertical(srcp, blurBuffer, buffer[0], d->weights, width, height, stride, d->radius, offset);
+#else
+            gaussianBlurVertical<T>(reinterpret_cast<const T *>(srcp), blurBuffer + d->radius, buffer[0], d->weights, width, height, stride, d->radius, offset);
+#endif
 
-            if (d->mode != -1) {
+            if (d->mode != -1)
                 detectEdge(buffer[0], buffer[1], buffer[2], width, height, stride, d);
-                if (!((d->mode & 1) || d->nms == 0))
-                    nonMaximumSuppression(buffer[0], buffer[1], buffer[2], width, height, stride, d->nms);
-            }
+
+            if (!((d->mode & 1) || d->nms == 0))
+                nonMaximumSuppression(buffer[0], buffer[1], buffer[2], width, height, stride, d->nms);
 
             if (!(d->mode & 1))
                 hysteresis(buffer[0], stack, width, height, stride, d->t_h, d->t_l);
@@ -762,6 +717,14 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
             }
         }
 
+        float * blurBuffer = vs_aligned_malloc<float>((d->vi->width + d->radiusAlign * 2) * sizeof(float), 32);
+        if (!blurBuffer) {
+            vsapi->setFilterError("TCanny: malloc failure (blurBuffer)", frameCtx);
+            vsapi->freeFrame(src);
+            vsapi->freeFrame(dst);
+            return nullptr;
+        }
+
         Stack stack {};
         if (!(d->mode & 1)) {
             stack.map = vs_aligned_malloc<uint8_t>(d->vi->width * d->vi->height, 32);
@@ -776,16 +739,17 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
         if (d->vi->format->sampleType == stInteger) {
             if (d->vi->format->bitsPerSample == 8)
-                process<uint8_t>(src, dst, buffer, stack, d, vsapi);
+                process<uint8_t>(src, dst, buffer, blurBuffer + d->radiusAlign, stack, d, vsapi);
             else
-                process<uint16_t>(src, dst, buffer, stack, d, vsapi);
+                process<uint16_t>(src, dst, buffer, blurBuffer + d->radiusAlign, stack, d, vsapi);
         } else {
-            process<float>(src, dst, buffer, stack, d, vsapi);
+            process<float>(src, dst, buffer, blurBuffer + d->radiusAlign, stack, d, vsapi);
         }
 
         vsapi->freeFrame(src);
         for (int i = 0; i < 3; i++)
             vs_aligned_free(buffer[i]);
+        vs_aligned_free(blurBuffer);
         vs_aligned_free(stack.map);
         vs_aligned_free(stack.pos);
         return dst;
@@ -897,10 +861,12 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         d.bins = 1 << d.vi->format->bitsPerSample;
         d.peak = d.bins - 1;
 
+#ifdef VS_TARGET_CPU_X86
         if (d.vi->format->bitsPerSample == 8)
             d.gaussianBlurVertical = gaussianBlurVertical_uint8;
         else
             d.gaussianBlurVertical = gaussianBlurVertical_uint16;
+#endif
     } else {
         d.t_h /= 255.f;
         d.t_l /= 255.f;
@@ -918,7 +884,9 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
             }
         }
 
+#ifdef VS_TARGET_CPU_X86
         d.gaussianBlurVertical = gaussianBlurVertical_float;
+#endif
     }
 
     if (d.op == 0)
@@ -947,6 +915,7 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         vsapi->freeNode(d.node);
         return;
     }
+    d.radiusAlign = (d.radius + 7) & -8;
 
     d.magnitude = 255.f / d.gmmax;
 
