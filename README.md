@@ -9,17 +9,13 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
 Usage
 =====
 
-    tcanny.TCanny(clip clip[, float sigma=1.5, float t_h=8.0, float t_l=1.0, int nms=3, int mode=0, int op=1, float gmmax=50.0, int[] planes])
+    tcanny.TCanny(clip clip[, float sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int[] planes])
 
 * sigma: Standard deviation of gaussian blur.
 
 * t_h: High gradient magnitude threshold for hysteresis.
 
 * t_l: Low gradient magnitude threshold for hysteresis.
-
-* nms: Byte mask choosing non-maxima suppression methods.
-  * (nms&1) = if pixel is maxima along nearest integer direction then keep
-  * (nms&3) = if pixel is maxima along linearly interpolated direction then keep
 
 * mode: Sets output format.
   * -1 = gaussian blur only

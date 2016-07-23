@@ -37,7 +37,7 @@ struct TCannyData {
     VSNodeRef * node;
     const VSVideoInfo * vi;
     float sigma, t_h, t_l, gmmax;
-    int nms, mode, op;
+    int mode, op;
     bool process[3];
     int radius, radiusAlign, bins;
     float * weights;
@@ -437,59 +437,25 @@ float getBin<float>(const float dir, const int n) {
     return (bin > n) ? 0.f : bin;
 }
 
-static void nonMaximumSuppression(const float * gradient, const float * direction, float * VS_RESTRICT blur, const int width, const int height,
-                                  const int stride, const int blurStride, const int nms) {
-    memset(blur - 8, 0, blurStride * height * sizeof(float));
+static void nonMaximumSuppression(const float * gradient, const float * direction, float * VS_RESTRICT blur, const int width, const int height, const int stride, const int blurStride) {
+    const int offsets[] { 1, -stride + 1, -stride, -stride - 1 };
 
-    gradient += stride;
-    direction += stride;
-    blur += blurStride;
-
-    const int offTable[] { 1, -stride + 1, -stride, -stride - 1 };
+    memset(blur, 0, width * sizeof(float));
 
     for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
-            if (nms & 1) {
-                const int off = offTable[getBin<int>(direction[x], 4)];
-                if (gradient[x] >= std::max(gradient[x + off], gradient[x - off])) {
-                    blur[x] = gradient[x];
-                    continue;
-                }
-            }
-
-            if (nms & 2) {
-                const int c = static_cast<int>(direction[x] * 4.f * M_1_PIF);
-                float val1, val2;
-
-                if (c == 0 || c >= 4) {
-                    const float h = std::tan(direction[x]);
-                    val1 = (1.f - h) * gradient[x + 1] + h * gradient[x - stride + 1];
-                    val2 = (1.f - h) * gradient[x - 1] + h * gradient[x + stride - 1];
-                } else if (c == 1) {
-                    const float w = 1.f / std::tan(direction[x]);
-                    val1 = (1.f - w) * gradient[x - stride] + w * gradient[x - stride + 1];
-                    val2 = (1.f - w) * gradient[x + stride] + w * gradient[x + stride - 1];
-                } else if (c == 2) {
-                    const float w = 1.f / std::tan(M_PIF - direction[x]);
-                    val1 = (1.f - w) * gradient[x - stride] + w * gradient[x - stride - 1];
-                    val2 = (1.f - w) * gradient[x + stride] + w * gradient[x + stride + 1];
-                } else {
-                    const float h = std::tan(M_PIF - direction[x]);
-                    val1 = (1.f - h) * gradient[x - 1] + h * gradient[x - stride - 1];
-                    val2 = (1.f - h) * gradient[x + 1] + h * gradient[x + stride + 1];
-                }
-
-                if (gradient[x] >= std::max(val1, val2)) {
-                    blur[x] = gradient[x];
-                    continue;
-                }
-            }
-        }
-
         gradient += stride;
         direction += stride;
         blur += blurStride;
+
+        for (int x = 1; x < width - 1; x++) {
+            const int offset = offsets[getBin<int>(direction[x], 4)];
+            blur[x] = (gradient[x] >= std::max(gradient[x + offset], gradient[x - offset])) ? gradient[x] : 0.f;
+        }
+
+        blur[0] = blur[width - 1] = 0.f;
     }
+
+    memset(blur + blurStride, 0, width * sizeof(float));
 }
 
 static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const int width, const int height, const int blurStride, const float t_h, const float t_l) {
@@ -668,11 +634,10 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, fl
             if (d->mode != -1)
                 detectEdge(blur, gradient, direction, width, height, stride, blurStride, d->mode, d->op);
 
-            if (!((d->mode & 1) || d->nms == 0))
-                nonMaximumSuppression(gradient, direction, blur, width, height, stride, blurStride, d->nms);
-
-            if (!(d->mode & 1))
+            if (!(d->mode & 1)) {
+                nonMaximumSuppression(gradient, direction, blur, width, height, stride, blurStride);
                 hysteresis(blur, stack, width, height, blurStride, d->t_h, d->t_l);
+            }
 
             if (d->mode == -1)
                 outputGB<T>(blur, dstp, width, height, stride, blurStride, d->peak, offset, d->lower[plane], d->upper[plane]);
@@ -805,10 +770,6 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     if (err)
         d.t_l = 1.f;
 
-    d.nms = int64ToIntS(vsapi->propGetInt(in, "nms", 0, &err));
-    if (err)
-        d.nms = 3;
-
     d.mode = int64ToIntS(vsapi->propGetInt(in, "mode", 0, &err));
 
     d.op = int64ToIntS(vsapi->propGetInt(in, "op", 0, &err));
@@ -821,11 +782,6 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
     if (d.sigma <= 0.f) {
         vsapi->setError(out, "TCanny: sigma must be greater than 0.0");
-        return;
-    }
-
-    if (d.nms < 0 || d.nms > 3) {
-        vsapi->setError(out, "TCanny: nms must be 0, 1, 2 or 3");
         return;
     }
 
@@ -936,7 +892,6 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
                  "sigma:float:opt;"
                  "t_h:float:opt;"
                  "t_l:float:opt;"
-                 "nms:int:opt;"
                  "mode:int:opt;"
                  "op:int:opt;"
                  "gmmax:float:opt;"
