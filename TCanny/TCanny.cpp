@@ -44,10 +44,8 @@ struct TCannyData {
     float magnitude;
     int peak;
     float lower[3], upper[3];
-    void (*operators)(const float * srcpp, const float * srcp, const float * srcpn, float * dx, float * dy, const int x);
 #ifdef VS_TARGET_CPU_X86
-    void (*gaussianBlurVertical)(const uint8_t * srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride, const int radius, const float offset);
-    void (*operatorsVec)(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x);
+    void (*gaussianBlurVertical)(const uint8_t * srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride, const int blurStride, const int radius, const float offset);
 #endif
 };
 
@@ -91,53 +89,35 @@ static float * gaussianWeights(const float sigma, int * radius) {
     return weights;
 }
 
-static void opTritical(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
-    *dx = srcp[x + 1] - srcp[x - 1];
-    *dy = srcpp[x] - srcpn[x];
-}
-
-static void opZhou(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
-    *dx = (srcpp[x + 1] + srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - srcp[x - 1] - srcpn[x - 1]) / 2.f;
-    *dy = (srcpp[x - 1] + srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - srcpn[x] - srcpn[x + 1]) / 2.f;
-}
-
-static void opSobel(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
-    *dx = srcpp[x + 1] + 2.f * srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - 2.f * srcp[x - 1] - srcpn[x - 1];
-    *dy = srcpp[x - 1] + 2.f * srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - 2.f * srcpn[x] - srcpn[x + 1];
-}
-
-static void opScharr(const float * srcpp, const float * srcp, const float * srcpn, float * VS_RESTRICT dx, float * VS_RESTRICT dy, const int x) {
-    *dx = 3.f * srcpp[x + 1] + 10.f * srcp[x + 1] + 3.f * srcpn[x + 1] - 3.f * srcpp[x - 1] - 10.f * srcp[x - 1] - 3.f * srcpn[x - 1];
-    *dy = 3.f * srcpp[x - 1] + 10.f * srcpp[x] + 3.f * srcpp[x + 1] - 3.f * srcpn[x - 1] - 10.f * srcpn[x] - 3.f * srcpn[x + 1];
-}
-
 #ifdef VS_TARGET_CPU_X86
-static void gaussianBlurHorizontal(float * _srcp, float * dstp, const float * weights, const int width, const int radius) {
+static void gaussianBlurHorizontal(float * buffer, float * blur, const float * weights, const int width, const int radius) {
     for (int i = 1; i <= radius; i++) {
-        _srcp[-i] = _srcp[i];
-        _srcp[width - 1 + i] = _srcp[width - 1 - i];
+        buffer[-i] = buffer[i - 1];
+        buffer[width - 1 + i] = buffer[width - i];
     }
 
     for (int x = 0; x < width; x += 8) {
         Vec8f sum { 0.f };
 
         for (int i = -radius; i <= radius; i++) {
-            const Vec8f srcp = Vec8f().load(_srcp + x + i);
+            const Vec8f srcp = Vec8f().load(buffer + x + i);
             sum = mul_add(srcp, weights[i], sum);
         }
 
-        sum.store_a(dstp + x);
+        sum.store_a(blur + x);
     }
 }
 
-static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride,
-                                       const int radius, const float offset) {
+static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * buffer, float * blur, const float * weights, const int width, const int height,
+                                       const int stride, const int blurStride, const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const uint8_t ** _srcp = new const uint8_t *[diameter];
 
     _srcp[radius] = __srcp;
-    for (int i = 1; i <= radius; i++)
-        _srcp[radius - i] = _srcp[radius + i] = __srcp + stride * i;
+    for (int i = 1; i <= radius; i++) {
+        _srcp[radius - i] = _srcp[radius + i - 1];
+        _srcp[radius + i] = _srcp[radius] + stride * i;
+    }
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
@@ -161,25 +141,30 @@ static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * buffer, f
             sum.store_a(buffer + x);
         }
 
-        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
+        gaussianBlurHorizontal(buffer, blur, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-        _srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
-        dstp += stride;
+        if (y < height - 1 - radius)
+            _srcp[diameter - 1] += stride;
+        else if (y > height - 1 - radius)
+            _srcp[diameter - 1] -= stride;
+        blur += blurStride;
     }
 
     delete[] _srcp;
 }
 
-static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride,
-                                        const int radius, const float offset) {
+static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * buffer, float * blur, const float * weights, const int width, const int height,
+                                        const int stride, const int blurStride, const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const uint16_t ** _srcp = new const uint16_t *[diameter];
 
     _srcp[radius] = reinterpret_cast<const uint16_t *>(__srcp);
-    for (int i = 1; i <= radius; i++)
-        _srcp[radius - i] = _srcp[radius + i] = reinterpret_cast<const uint16_t *>(__srcp) + stride * i;
+    for (int i = 1; i <= radius; i++) {
+        _srcp[radius - i] = _srcp[radius + i - 1];
+        _srcp[radius + i] = _srcp[radius] + stride * i;
+    }
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
@@ -199,25 +184,30 @@ static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * buffer, 
             sum.store_a(buffer + x);
         }
 
-        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
+        gaussianBlurHorizontal(buffer, blur, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-        _srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
-        dstp += stride;
+        if (y < height - 1 - radius)
+            _srcp[diameter - 1] += stride;
+        else if (y > height - 1 - radius)
+            _srcp[diameter - 1] -= stride;
+        blur += blurStride;
     }
 
     delete[] _srcp;
 }
 
-static void gaussianBlurVertical_float(const uint8_t * __srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride,
-                                       const int radius, const float offset) {
+static void gaussianBlurVertical_float(const uint8_t * __srcp, float * buffer, float * blur, const float * weights, const int width, const int height,
+                                       const int stride, const int blurStride, const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const float ** _srcp = new const float *[diameter];
 
     _srcp[radius] = reinterpret_cast<const float *>(__srcp);
-    for (int i = 1; i <= radius; i++)
-        _srcp[radius - i] = _srcp[radius + i] = reinterpret_cast<const float *>(__srcp) + stride * i;
+    for (int i = 1; i <= radius; i++) {
+        _srcp[radius - i] = _srcp[radius + i - 1];
+        _srcp[radius + i] = _srcp[radius] + stride * i;
+    }
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
@@ -231,119 +221,99 @@ static void gaussianBlurVertical_float(const uint8_t * __srcp, float * buffer, f
             sum.store_a(buffer + x);
         }
 
-        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
+        gaussianBlurHorizontal(buffer, blur, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-        _srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
-        dstp += stride;
+        if (y < height - 1 - radius)
+            _srcp[diameter - 1] += stride;
+        else if (y > height - 1 - radius)
+            _srcp[diameter - 1] -= stride;
+        blur += blurStride;
     }
 
     delete[] _srcp;
 }
 
-static void opTritical(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
-    *dx = Vec8f().load(srcp + x + 1) - Vec8f().load_a(srcp + x - 1);
-    *dy = Vec8f().load(srcpp + x) - Vec8f().load(srcpn + x);
-}
+static void detectEdge(float * blur, float * gradient, float * direction, const int width, const int height, const int stride, const int blurStride, const int mode, const int op) {
+    float * srcpp = blur;
+    float * srcp = blur;
+    float * srcpn = blur + blurStride;
 
-static void opZhou(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
-    *dx = (Vec8f().load(srcpp + x + 1) + Vec8f().load(srcp + x + 1) + Vec8f().load(srcpn + x + 1)
-        - Vec8f().load_a(srcpp + x - 1) - Vec8f().load_a(srcp + x - 1) - Vec8f().load_a(srcpn + x - 1)) * 0.5f;
-    *dy = (Vec8f().load_a(srcpp + x - 1) + Vec8f().load(srcpp + x) + Vec8f().load(srcpp + x + 1)
-        - Vec8f().load_a(srcpn + x - 1) - Vec8f().load(srcpn + x) - Vec8f().load(srcpn + x + 1)) * 0.5f;
-}
+    srcp[-1] = srcp[0];
+    srcp[width] = srcp[width - 1];
 
-static void opSobel(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
-    *dx = Vec8f().load(srcpp + x + 1) + mul_add(2.f, Vec8f().load(srcp + x + 1), Vec8f().load(srcpn + x + 1))
-        - Vec8f().load_a(srcpp + x - 1) - mul_add(2.f, Vec8f().load_a(srcp + x - 1), Vec8f().load_a(srcpn + x - 1));
-    *dy = Vec8f().load_a(srcpp + x - 1) + mul_add(2.f, Vec8f().load(srcpp + x), Vec8f().load(srcpp + x + 1))
-        - Vec8f().load_a(srcpn + x - 1) - mul_add(2.f, Vec8f().load(srcpn + x), Vec8f().load(srcpn + x + 1));
-}
+    for (int y = 0; y < height; y++) {
+        srcpn[-1] = srcpn[0];
+        srcpn[width] = srcpn[width - 1];
 
-static void opScharr(const float * srcpp, const float * srcp, const float * srcpn, Vec8f * dx, Vec8f * dy, const int x) {
-    *dx = mul_add(3.f, Vec8f().load(srcpp + x + 1), mul_add(10.f, Vec8f().load(srcp + x + 1), 3.f * Vec8f().load(srcpn + x + 1)))
-        - mul_add(3.f, Vec8f().load_a(srcpp + x - 1), mul_add(10.f, Vec8f().load_a(srcp + x - 1), 3.f * Vec8f().load_a(srcpn + x - 1)));
-    *dy = mul_add(3.f, Vec8f().load_a(srcpp + x - 1), mul_add(10.f, Vec8f().load(srcpp + x), 3.f * Vec8f().load(srcpp + x + 1)))
-        - mul_add(3.f, Vec8f().load_a(srcpn + x - 1), mul_add(10.f, Vec8f().load(srcpn + x), 3.f * Vec8f().load(srcpn + x + 1)));
-}
+        for (int x = 0; x < width; x += 8) {
+            Vec8f gx, gy;
 
-static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const TCannyData * d) {
-    const int regularPart = (width % 8 ? width : width - 1) & -8;
+            if (op == 0) {
+                gx = Vec8f().load(srcp + x + 1) - Vec8f().load(srcp + x - 1);
+                gy = Vec8f().load_a(srcpp + x) - Vec8f().load_a(srcpn + x);
+            } else if (op == 1) {
+                gx = (Vec8f().load(srcpp + x + 1) + Vec8f().load(srcp + x + 1) + Vec8f().load(srcpn + x + 1)
+                    - Vec8f().load(srcpp + x - 1) - Vec8f().load(srcp + x - 1) - Vec8f().load(srcpn + x - 1)) * 0.5f;
+                gy = (Vec8f().load(srcpp + x - 1) + Vec8f().load_a(srcpp + x) + Vec8f().load(srcpp + x + 1)
+                    - Vec8f().load(srcpn + x - 1) - Vec8f().load_a(srcpn + x) - Vec8f().load(srcpn + x + 1)) * 0.5f;
+            } else if (op == 2) {
+                gx = Vec8f().load(srcpp + x + 1) + mul_add(2.f, Vec8f().load(srcp + x + 1), Vec8f().load(srcpn + x + 1))
+                    - Vec8f().load(srcpp + x - 1) - mul_add(2.f, Vec8f().load(srcp + x - 1), Vec8f().load(srcpn + x - 1));
+                gy = Vec8f().load(srcpp + x - 1) + mul_add(2.f, Vec8f().load_a(srcpp + x), Vec8f().load(srcpp + x + 1))
+                    - Vec8f().load(srcpn + x - 1) - mul_add(2.f, Vec8f().load_a(srcpn + x), Vec8f().load(srcpn + x + 1));
+            } else {
+                gx = mul_add(3.f, Vec8f().load(srcpp + x + 1), mul_add(10.f, Vec8f().load(srcp + x + 1), 3.f * Vec8f().load(srcpn + x + 1)))
+                    - mul_add(3.f, Vec8f().load(srcpp + x - 1), mul_add(10.f, Vec8f().load(srcp + x - 1), 3.f * Vec8f().load(srcpn + x - 1)));
+                gy = mul_add(3.f, Vec8f().load(srcpp + x - 1), mul_add(10.f, Vec8f().load_a(srcpp + x), 3.f * Vec8f().load(srcpp + x + 1)))
+                    - mul_add(3.f, Vec8f().load(srcpn + x - 1), mul_add(10.f, Vec8f().load_a(srcpn + x), 3.f * Vec8f().load(srcpn + x + 1)));
+            }
 
-    memset(_gimg, 0, stride * height * sizeof(float));
-    memset(_dimg, 0, stride * height * sizeof(float));
+            sqrt(mul_add(gx, gx, gy * gy)).store_a(gradient + x);
 
-    float * VS_RESTRICT srcpp = _srcp;
-    float * VS_RESTRICT srcp = srcpp + stride;
-    float * VS_RESTRICT srcpn = srcp + stride;
-    float * VS_RESTRICT gimg = _gimg + stride;
-    float * VS_RESTRICT dimg = _dimg + stride;
-
-    for (int y = 1; y < height - 1; y++) {
-        int x;
-
-        for (x = 1; x < regularPart; x += 8) {
-            Vec8f dx, dy;
-
-            d->operatorsVec(srcpp, srcp, srcpn, &dx, &dy, x);
-
-            sqrt(mul_add(dx, dx, dy * dy)).store(gimg + x);
-
-            if (d->mode != 1) {
-                const Vec8f dr = atan2(dy, dx);
-                if_add(dr < 0.f, dr, M_PIF).store(dimg + x);
+            if (mode != 1) {
+                const Vec8f dr = atan2(gy, gx);
+                if_add(dr < 0.f, dr, M_PIF).store_a(direction + x);
             }
         }
 
-        for (; x < width - 1; x++) {
-            float dx, dy;
-
-            d->operators(srcpp, srcp, srcpn, &dx, &dy, x);
-
-            gimg[x] = std::sqrt(dx * dx + dy * dy);
-
-            if (d->mode != 1) {
-                const float dr = std::atan2(dy, dx);
-                dimg[x] = dr + (dr < 0.f ? M_PIF : 0.f);
-            }
-        }
-
-        srcpp += stride;
-        srcp += stride;
-        srcpn += stride;
-        gimg += stride;
-        dimg += stride;
+        srcpp = srcp;
+        srcp = srcpn;
+        if (y < height - 2)
+            srcpn += blurStride;
+        gradient += stride;
+        direction += stride;
     }
-
-    memcpy(_srcp, _gimg, stride * height * sizeof(float));
 }
 #else
-static void gaussianBlurHorizontal(float * VS_RESTRICT srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int radius) {
+static void gaussianBlurHorizontal(float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int radius) {
     for (int i = 1; i <= radius; i++) {
-        srcp[-i] = srcp[i];
-        srcp[width - 1 + i] = srcp[width - 1 - i];
+        buffer[-i] = buffer[i - 1];
+        buffer[width - 1 + i] = buffer[width - i];
     }
 
     for (int x = 0; x < width; x++) {
         float sum = 0.f;
 
         for (int i = -radius; i <= radius; i++)
-            sum += srcp[x + i] * weights[i];
+            sum += buffer[x + i] * weights[i];
 
-        dstp[x] = sum;
+        blur[x] = sum;
     }
 }
 
 template<typename T>
-static void gaussianBlurVertical(const T * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT dstp, const float * weights,
-                                 const int width, const int height, const int stride, const int radius, const float offset) {
+static void gaussianBlurVertical(const T * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int height,
+                                 const int stride, const int blurStride, const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const T ** srcp = new const T *[diameter];
 
     srcp[radius] = _srcp;
-    for (int i = 1; i <= radius; i++)
-        srcp[radius - i] = srcp[radius + i] = _srcp + stride * i;
+    for (int i = 1; i <= radius; i++) {
+        srcp[radius - i] = srcp[radius + i - 1];
+        srcp[radius + i] = srcp[radius] + stride * i;
+    }
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -355,26 +325,31 @@ static void gaussianBlurVertical(const T * _srcp, float * VS_RESTRICT buffer, fl
             buffer[x] = sum;
         }
 
-        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
+        gaussianBlurHorizontal(buffer, blur, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             srcp[i] = srcp[i + 1];
-        srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
-        dstp += stride;
+        if (y < height - 1 - radius)
+            srcp[diameter - 1] += stride;
+        else if (y > height - 1 - radius)
+            srcp[diameter - 1] -= stride;
+        blur += blurStride;
     }
 
     delete[] srcp;
 }
 
 template<>
-void gaussianBlurVertical<float>(const float * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT dstp, const float * weights,
-                                 const int width, const int height, const int stride, const int radius, const float offset) {
+void gaussianBlurVertical<float>(const float * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int height,
+                                 const int stride, const int blurStride, const int radius, const float offset) {
     const int diameter = radius * 2 + 1;
     const float ** srcp = new const float *[diameter];
 
     srcp[radius] = _srcp;
-    for (int i = 1; i <= radius; i++)
-        srcp[radius - i] = srcp[radius + i] = _srcp + stride * i;
+    for (int i = 1; i <= radius; i++) {
+        srcp[radius - i] = srcp[radius + i - 1];
+        srcp[radius + i] = srcp[radius] + stride * i;
+    }
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
@@ -386,123 +361,147 @@ void gaussianBlurVertical<float>(const float * _srcp, float * VS_RESTRICT buffer
             buffer[x] = sum;
         }
 
-        gaussianBlurHorizontal(buffer, dstp, weights + radius, width, radius);
+        gaussianBlurHorizontal(buffer, blur, weights + radius, width, radius);
 
         for (int i = 0; i < diameter - 1; i++)
             srcp[i] = srcp[i + 1];
-        srcp[diameter - 1] += stride * (y < height - 1 - radius ? 1 : -1);
-        dstp += stride;
+        if (y < height - 1 - radius)
+            srcp[diameter - 1] += stride;
+        else if (y > height - 1 - radius)
+            srcp[diameter - 1] -= stride;
+        blur += blurStride;
     }
 
     delete[] srcp;
 }
 
-static void detectEdge(float * _srcp, float * _gimg, float * _dimg, const int width, const int height, const int stride, const TCannyData * d) {
-    memset(_gimg, 0, stride * height * sizeof(float));
-    memset(_dimg, 0, stride * height * sizeof(float));
+static void detectEdge(float * blur, float * VS_RESTRICT gradient, float * VS_RESTRICT direction, const int width, const int height,
+                       const int stride, const int blurStride, const int mode, const int op) {
+    float * VS_RESTRICT srcpp = blur;
+    float * VS_RESTRICT srcp = blur;
+    float * VS_RESTRICT srcpn = blur + blurStride;
 
-    float * VS_RESTRICT srcpp = _srcp;
-    float * VS_RESTRICT srcp = srcpp + stride;
-    float * VS_RESTRICT srcpn = srcp + stride;
-    float * VS_RESTRICT gimg = _gimg + stride;
-    float * VS_RESTRICT dimg = _dimg + stride;
+    srcp[-1] = srcp[0];
+    srcp[width] = srcp[width - 1];
 
-    for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
-            float dx, dy;
+    for (int y = 0; y < height; y++) {
+        srcpn[-1] = srcpn[0];
+        srcpn[width] = srcpn[width - 1];
 
-            d->operators(srcpp, srcp, srcpn, &dx, &dy, x);
+        for (int x = 0; x < width; x++) {
+            float gx, gy;
 
-            gimg[x] = std::sqrt(dx * dx + dy * dy);
+            if (op == 0) {
+                gx = srcp[x + 1] - srcp[x - 1];
+                gy = srcpp[x] - srcpn[x];
+            } else if (op == 1) {
+                gx = (srcpp[x + 1] + srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - srcp[x - 1] - srcpn[x - 1]) / 2.f;
+                gy = (srcpp[x - 1] + srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - srcpn[x] - srcpn[x + 1]) / 2.f;
+            } else if (op == 2) {
+                gx = srcpp[x + 1] + 2.f * srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - 2.f * srcp[x - 1] - srcpn[x - 1];
+                gy = srcpp[x - 1] + 2.f * srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - 2.f * srcpn[x] - srcpn[x + 1];
+            } else {
+                gx = 3.f * srcpp[x + 1] + 10.f * srcp[x + 1] + 3.f * srcpn[x + 1] - 3.f * srcpp[x - 1] - 10.f * srcp[x - 1] - 3.f * srcpn[x - 1];
+                gy = 3.f * srcpp[x - 1] + 10.f * srcpp[x] + 3.f * srcpp[x + 1] - 3.f * srcpn[x - 1] - 10.f * srcpn[x] - 3.f * srcpn[x + 1];
+            }
 
-            if (d->mode != 1) {
-                const float dr = std::atan2(dy, dx);
-                dimg[x] = dr + (dr < 0.f ? M_PIF : 0.f);
+            gradient[x] = std::sqrt(gx * gx + gy * gy);
+
+            if (mode != 1) {
+                float dr = std::atan2(gy, gx);
+                if (dr < 0.f)
+                    dr += M_PIF;
+                direction[x] = dr;
             }
         }
 
-        srcpp += stride;
-        srcp += stride;
-        srcpn += stride;
-        gimg += stride;
-        dimg += stride;
+        srcpp = srcp;
+        srcp = srcpn;
+        if (y < height - 2)
+            srcpn += blurStride;
+        gradient += stride;
+        direction += stride;
     }
-
-    memcpy(_srcp, _gimg, stride * height * sizeof(float));
 }
 #endif
 
 template<typename T>
 static T getBin(const float dir, const int n) {
-    const int bin = static_cast<int>(dir * (n * M_1_PIF) + 0.5f);
+    const int bin = static_cast<int>(dir * n * M_1_PIF + 0.5f);
     return (bin >= n) ? 0 : bin;
 }
 
 template<>
 float getBin<float>(const float dir, const int n) {
-    const float bin = dir * (n * M_1_PIF);
+    const float bin = dir * M_1_PIF;
     return (bin > n) ? 0.f : bin;
 }
 
-static void nonMaximumSuppression(float * VS_RESTRICT srcp, float * VS_RESTRICT gimg, float * VS_RESTRICT dimg, const int width, const int height, const int stride, const int nms) {
-    const int offTable[4] { 1, -stride + 1, -stride, -stride - 1 };
-    srcp += stride;
-    gimg += stride;
-    dimg += stride;
+static void nonMaximumSuppression(const float * gradient, const float * direction, float * VS_RESTRICT blur, const int width, const int height,
+                                  const int stride, const int blurStride, const int nms) {
+    memset(blur - 8, 0, blurStride * height * sizeof(float));
+
+    gradient += stride;
+    direction += stride;
+    blur += blurStride;
+
+    const int offTable[] { 1, -stride + 1, -stride, -stride - 1 };
 
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             if (nms & 1) {
-                const int off = offTable[getBin<int>(dimg[x], 4)];
-                if (gimg[x] >= std::max(gimg[x + off], gimg[x - off]))
+                const int off = offTable[getBin<int>(direction[x], 4)];
+                if (gradient[x] >= std::max(gradient[x + off], gradient[x - off])) {
+                    blur[x] = gradient[x];
                     continue;
+                }
             }
 
             if (nms & 2) {
-                const int c = static_cast<int>(dimg[x] * (4.f * M_1_PIF));
+                const int c = static_cast<int>(direction[x] * 4.f * M_1_PIF);
                 float val1, val2;
 
                 if (c == 0 || c >= 4) {
-                    const float h = std::tan(dimg[x]);
-                    val1 = (1.f - h) * gimg[x + 1] + h * gimg[x - stride + 1];
-                    val2 = (1.f - h) * gimg[x - 1] + h * gimg[x + stride - 1];
+                    const float h = std::tan(direction[x]);
+                    val1 = (1.f - h) * gradient[x + 1] + h * gradient[x - stride + 1];
+                    val2 = (1.f - h) * gradient[x - 1] + h * gradient[x + stride - 1];
                 } else if (c == 1) {
-                    const float w = 1.f / std::tan(dimg[x]);
-                    val1 = (1.f - w) * gimg[x - stride] + w * gimg[x - stride + 1];
-                    val2 = (1.f - w) * gimg[x + stride] + w * gimg[x + stride - 1];
+                    const float w = 1.f / std::tan(direction[x]);
+                    val1 = (1.f - w) * gradient[x - stride] + w * gradient[x - stride + 1];
+                    val2 = (1.f - w) * gradient[x + stride] + w * gradient[x + stride - 1];
                 } else if (c == 2) {
-                    const float w = 1.f / std::tan(M_PIF - dimg[x]);
-                    val1 = (1.f - w) * gimg[x - stride] + w * gimg[x - stride - 1];
-                    val2 = (1.f - w) * gimg[x + stride] + w * gimg[x + stride + 1];
+                    const float w = 1.f / std::tan(M_PIF - direction[x]);
+                    val1 = (1.f - w) * gradient[x - stride] + w * gradient[x - stride - 1];
+                    val2 = (1.f - w) * gradient[x + stride] + w * gradient[x + stride + 1];
                 } else {
-                    const float h = std::tan(M_PIF - dimg[x]);
-                    val1 = (1.f - h) * gimg[x - 1] + h * gimg[x - stride - 1];
-                    val2 = (1.f - h) * gimg[x + 1] + h * gimg[x + stride + 1];
+                    const float h = std::tan(M_PIF - direction[x]);
+                    val1 = (1.f - h) * gradient[x - 1] + h * gradient[x - stride - 1];
+                    val2 = (1.f - h) * gradient[x + 1] + h * gradient[x + stride + 1];
                 }
 
-                if (gimg[x] >= std::max(val1, val2))
+                if (gradient[x] >= std::max(val1, val2)) {
+                    blur[x] = gradient[x];
                     continue;
+                }
             }
-
-            srcp[x] = -FLT_MAX;
         }
 
-        srcp += stride;
-        gimg += stride;
-        dimg += stride;
+        gradient += stride;
+        direction += stride;
+        blur += blurStride;
     }
 }
 
-static void hysteresis(float * VS_RESTRICT srcp, Stack & VS_RESTRICT stack, const int width, const int height, const int stride, const float t_h, const float t_l) {
+static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const int width, const int height, const int blurStride, const float t_h, const float t_l) {
     memset(stack.map, 0, width * height);
     stack.index = -1;
 
     for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
-            if (srcp[x + stride * y] < t_h || stack.map[x + width * y])
+            if (blur[x + blurStride * y] < t_h || stack.map[x + width * y])
                 continue;
 
-            srcp[x + stride * y] = FLT_MAX;
+            blur[x + blurStride * y] = FLT_MAX;
             stack.map[x + width * y] = UINT8_MAX;
             push(stack, x, y);
 
@@ -515,8 +514,8 @@ static void hysteresis(float * VS_RESTRICT srcp, Stack & VS_RESTRICT stack, cons
 
                 for (int yy = yMin; yy <= yMax; yy++) {
                     for (int xx = xMin; xx <= xMax; xx++) {
-                        if (srcp[xx + stride * yy] > t_l && !stack.map[xx + width * yy]) {
-                            srcp[xx + stride * yy] = FLT_MAX;
+                        if (blur[xx + blurStride * yy] > t_l && !stack.map[xx + width * yy]) {
+                            blur[xx + blurStride * yy] = FLT_MAX;
                             stack.map[xx + width * yy] = UINT8_MAX;
                             push(stack, xx, yy);
                         }
@@ -528,160 +527,163 @@ static void hysteresis(float * VS_RESTRICT srcp, Stack & VS_RESTRICT stack, cons
 }
 
 template<typename T>
-static void outputGB(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int stride,
+static void outputGB(const float * blur, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
                      const int peak, const float offset, const float lower, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = std::min(std::max(static_cast<int>(srcp[x] + 0.5f), 0), peak);
+            dstp[x] = std::min(std::max(static_cast<int>(blur[x] + 0.5f), 0), peak);
 
-        srcp += stride;
+        blur += blurStride;
         dstp += stride;
     }
 }
 
 template<>
-void outputGB<float>(const float * srcp, float * VS_RESTRICT dstp, const int width, const int height, const int stride,
+void outputGB<float>(const float * blur, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
                      const int peak, const float offset, const float lower, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = std::min(std::max(srcp[x] - offset, lower), upper);
+            dstp[x] = std::min(std::max(blur[x] - offset, lower), upper);
 
-        srcp += stride;
+        blur += blurStride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void binarizeCE(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const float t_h, const T peak, const float lower, const float upper) {
+static void binarizeCE(const float * blur, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
+                       const float t_h, const T peak, const float lower, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (srcp[x] >= t_h) ? peak : 0;
+            dstp[x] = (blur[x] >= t_h) ? peak : 0;
 
-        srcp += stride;
+        blur += blurStride;
         dstp += stride;
     }
 }
 
 template<>
-void binarizeCE<float>(const float * srcp, float * VS_RESTRICT dstp, const int width, const int height, const int stride,
+void binarizeCE<float>(const float * blur, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
                        const float t_h, const float peak, const float lower, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (srcp[x] >= t_h) ? upper : lower;
+            dstp[x] = (blur[x] >= t_h) ? upper : lower;
 
-        srcp += stride;
+        blur += blurStride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void discretizeGM(const float * gimg, T * VS_RESTRICT dstp, const int width, const int height, const int stride,
+static void discretizeGM(const float * gradient, T * VS_RESTRICT dstp, const int width, const int height, const int stride,
                          const float magnitude, const int peak, const float offset, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = std::min(static_cast<int>(gimg[x] * magnitude + 0.5f), peak);
+            dstp[x] = std::min(static_cast<int>(gradient[x] * magnitude + 0.5f), peak);
 
-        gimg += stride;
+        gradient += stride;
         dstp += stride;
     }
 }
 
 template<>
-void discretizeGM<float>(const float * gimg, float * VS_RESTRICT dstp, const int width, const int height, const int stride,
+void discretizeGM<float>(const float * gradient, float * VS_RESTRICT dstp, const int width, const int height, const int stride,
                          const float magnitude, const int peak, const float offset, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = std::min(gimg[x] * magnitude - offset, upper);
+            dstp[x] = std::min(gradient[x] * magnitude - offset, upper);
 
-        gimg += stride;
+        gradient += stride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void discretizeDM_T(const float * srcp, const float * dimg, T * VS_RESTRICT dstp, const int width, const int height, const int stride,
+static void discretizeDM_T(const float * blur, const float * direction, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
                            const float t_h, const int bins, const float offset, const float lower) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (srcp[x] >= t_h) ? getBin<T>(dimg[x], bins) : 0;
+            dstp[x] = (blur[x] >= t_h) ? getBin<T>(direction[x], bins) : 0;
 
-        srcp += stride;
-        dimg += stride;
+        blur += blurStride;
+        direction += stride;
         dstp += stride;
     }
 }
 
 template<>
-void discretizeDM_T<float>(const float * srcp, const float * dimg, float * VS_RESTRICT dstp, const int width, const int height, const int stride,
+void discretizeDM_T<float>(const float * blur, const float * direction, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
                            const float t_h, const int bins, const float offset, const float lower) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (srcp[x] >= t_h) ? getBin<float>(dimg[x], bins) - offset : lower;
+            dstp[x] = (blur[x] >= t_h) ? getBin<float>(direction[x], bins) - offset : lower;
 
-        srcp += stride;
-        dimg += stride;
+        blur += blurStride;
+        direction += stride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void discretizeDM(const float * dimg, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) {
+static void discretizeDM(const float * direction, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = getBin<T>(dimg[x], bins);
+            dstp[x] = getBin<T>(direction[x], bins);
 
-        dimg += stride;
+        direction += stride;
         dstp += stride;
     }
 }
 
 template<>
-void discretizeDM<float>(const float * dimg, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) {
+void discretizeDM<float>(const float * direction, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = getBin<float>(dimg[x], bins) - offset;
+            dstp[x] = getBin<float>(direction[x], bins) - offset;
 
-        dimg += stride;
+        direction += stride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer[3], float * blurBuffer, Stack & stack, const TCannyData * d, const VSAPI * vsapi) {
+static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, float * blur, float * gradient, float * direction,
+                    Stack & stack, const TCannyData * d, const VSAPI * vsapi) {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const int width = vsapi->getFrameWidth(src, plane);
             const int height = vsapi->getFrameHeight(src, plane);
             const int stride = vsapi->getStride(src, plane) / sizeof(T);
+            const int blurStride = stride + 16;
             const uint8_t * srcp = vsapi->getReadPtr(src, plane);
             T * dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
             const float offset = (d->vi->format->sampleType == stInteger || plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.f : 0.5f;
 
 #ifdef VS_TARGET_CPU_X86
-            d->gaussianBlurVertical(srcp, blurBuffer, buffer[0], d->weights, width, height, stride, d->radius, offset);
+            d->gaussianBlurVertical(srcp, buffer, blur, d->weights, width, height, stride, blurStride, d->radius, offset);
 #else
-            gaussianBlurVertical<T>(reinterpret_cast<const T *>(srcp), blurBuffer + d->radius, buffer[0], d->weights, width, height, stride, d->radius, offset);
+            gaussianBlurVertical<T>(reinterpret_cast<const T *>(srcp), buffer, blur, d->weights, width, height, stride, blurStride, d->radius, offset);
 #endif
 
             if (d->mode != -1)
-                detectEdge(buffer[0], buffer[1], buffer[2], width, height, stride, d);
+                detectEdge(blur, gradient, direction, width, height, stride, blurStride, d->mode, d->op);
 
             if (!((d->mode & 1) || d->nms == 0))
-                nonMaximumSuppression(buffer[0], buffer[1], buffer[2], width, height, stride, d->nms);
+                nonMaximumSuppression(gradient, direction, blur, width, height, stride, blurStride, d->nms);
 
             if (!(d->mode & 1))
-                hysteresis(buffer[0], stack, width, height, stride, d->t_h, d->t_l);
+                hysteresis(blur, stack, width, height, blurStride, d->t_h, d->t_l);
 
             if (d->mode == -1)
-                outputGB<T>(buffer[0], dstp, width, height, stride, d->peak, offset, d->lower[plane], d->upper[plane]);
+                outputGB<T>(blur, dstp, width, height, stride, blurStride, d->peak, offset, d->lower[plane], d->upper[plane]);
             else if (d->mode == 0)
-                binarizeCE<T>(buffer[0], dstp, width, height, stride, d->t_h, d->peak, d->lower[plane], d->upper[plane]);
+                binarizeCE<T>(blur, dstp, width, height, stride, blurStride, d->t_h, d->peak, d->lower[plane], d->upper[plane]);
             else if (d->mode == 1)
-                discretizeGM<T>(buffer[1], dstp, width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
+                discretizeGM<T>(gradient, dstp, width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
             else if (d->mode == 2)
-                discretizeDM_T<T>(buffer[0], buffer[2], dstp, width, height, stride, d->t_h, d->bins, offset, d->lower[plane]);
+                discretizeDM_T<T>(blur, direction, dstp, width, height, stride, blurStride, d->t_h, d->bins, offset, d->lower[plane]);
             else
-                discretizeDM<T>(buffer[2], dstp, width, height, stride, d->bins, offset);
+                discretizeDM<T>(direction, dstp, width, height, stride, d->bins, offset);
         }
     }
 }
@@ -706,23 +708,42 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
         const int pl[] { 0, 1, 2 };
         VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
 
-        float * buffer[3];
-        for (int i = 0; i < 3; i++) {
-            buffer[i] = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
-            if (!buffer[i]) {
-                vsapi->setFilterError("TCanny: malloc failure (buffer)", frameCtx);
+        float * buffer = vs_aligned_malloc<float>((d->vi->width + d->radiusAlign * 2) * sizeof(float), 32);
+        if (!buffer) {
+            vsapi->setFilterError("TCanny: malloc failure (buffer)", frameCtx);
+            vsapi->freeFrame(src);
+            vsapi->freeFrame(dst);
+            return nullptr;
+        }
+
+        float * blur;
+        blur = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + 16) * d->vi->height * sizeof(float), 32);
+        if (!blur) {
+            vsapi->setFilterError("TCanny: malloc failure (blur)", frameCtx);
+            vsapi->freeFrame(src);
+            vsapi->freeFrame(dst);
+            return nullptr;
+        }
+
+        float * gradient = nullptr, * direction = nullptr;
+        if (d->mode != -1) {
+            gradient = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
+            if (!gradient) {
+                vsapi->setFilterError("TCanny: malloc failure (gradient)", frameCtx);
                 vsapi->freeFrame(src);
                 vsapi->freeFrame(dst);
                 return nullptr;
             }
-        }
 
-        float * blurBuffer = vs_aligned_malloc<float>((d->vi->width + d->radiusAlign * 2) * sizeof(float), 32);
-        if (!blurBuffer) {
-            vsapi->setFilterError("TCanny: malloc failure (blurBuffer)", frameCtx);
-            vsapi->freeFrame(src);
-            vsapi->freeFrame(dst);
-            return nullptr;
+            if (d->mode != 1) {
+                direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
+                if (!direction) {
+                    vsapi->setFilterError("TCanny: malloc failure (direction)", frameCtx);
+                    vsapi->freeFrame(src);
+                    vsapi->freeFrame(dst);
+                    return nullptr;
+                }
+            }
         }
 
         Stack stack {};
@@ -739,17 +760,18 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
         if (d->vi->format->sampleType == stInteger) {
             if (d->vi->format->bitsPerSample == 8)
-                process<uint8_t>(src, dst, buffer, blurBuffer + d->radiusAlign, stack, d, vsapi);
+                process<uint8_t>(src, dst, buffer + d->radiusAlign, blur + 8, gradient, direction, stack, d, vsapi);
             else
-                process<uint16_t>(src, dst, buffer, blurBuffer + d->radiusAlign, stack, d, vsapi);
+                process<uint16_t>(src, dst, buffer + d->radiusAlign, blur + 8, gradient, direction, stack, d, vsapi);
         } else {
-            process<float>(src, dst, buffer, blurBuffer + d->radiusAlign, stack, d, vsapi);
+            process<float>(src, dst, buffer + d->radiusAlign, blur + 8, gradient, direction, stack, d, vsapi);
         }
 
         vsapi->freeFrame(src);
-        for (int i = 0; i < 3; i++)
-            vs_aligned_free(buffer[i]);
-        vs_aligned_free(blurBuffer);
+        vs_aligned_free(buffer);
+        vs_aligned_free(blur);
+        vs_aligned_free(gradient);
+        vs_aligned_free(direction);
         vs_aligned_free(stack.map);
         vs_aligned_free(stack.pos);
         return dst;
@@ -888,26 +910,6 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         d.gaussianBlurVertical = gaussianBlurVertical_float;
 #endif
     }
-
-    if (d.op == 0)
-        d.operators = opTritical;
-    else if (d.op == 1)
-        d.operators = opZhou;
-    else if (d.op == 2)
-        d.operators = opSobel;
-    else
-        d.operators = opScharr;
-
-#ifdef VS_TARGET_CPU_X86
-    if (d.op == 0)
-        d.operatorsVec = opTritical;
-    else if (d.op == 1)
-        d.operatorsVec = opZhou;
-    else if (d.op == 2)
-        d.operatorsVec = opSobel;
-    else
-        d.operatorsVec = opScharr;
-#endif
 
     d.weights = gaussianWeights(d.sigma, &d.radius);
     if (!d.weights) {
