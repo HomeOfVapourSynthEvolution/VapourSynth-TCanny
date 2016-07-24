@@ -109,6 +109,10 @@ public:
     void store_a(void * p) const {
         _mm_store_si128((__m128i*)p, xmm);
     }
+    // Member function to store into array using a non-temporal memory hint, aligned by 16
+    void stream(void * p) const {
+        _mm_stream_si128((__m128i*)p, xmm);
+    }
     // Member function to change a single bit
     // Note: This function is inefficient. Use load function if changing more than one bit
     Vec128b const & set_bit(uint32_t index, int value) {
@@ -198,6 +202,10 @@ static inline Vec128b & operator ^= (Vec128b & a, Vec128b const & b) {
 }
 
 // Define functions for this class
+
+static inline Vec128b setzero_128b() {
+    return _mm_setzero_si128();
+}
 
 // function andnot: a & ~ b
 static inline Vec128b andnot (Vec128b const & a, Vec128b const & b) {
@@ -5109,6 +5117,10 @@ static inline Vec16c compress_saturated (Vec8s const & low, Vec8s const & high) 
     return  _mm_packs_epi16(low,high);
 }
 
+static inline Vec16uc compress_saturated_s2u (Vec8s const & low, Vec8s const & high) {
+    return  _mm_packus_epi16(low,high);
+}
+
 // Function compress : packs two vectors of 16-bit integers to one vector of 8-bit integers
 // Unsigned, overflow wraps around
 static inline Vec16uc compress (Vec8us const & low, Vec8us const & high) {
@@ -5166,6 +5178,18 @@ static inline Vec8s compress (Vec4i const & low, Vec4i const & high) {
 // Signed with saturation
 static inline Vec8s compress_saturated (Vec4i const & low, Vec4i const & high) {
     return  _mm_packs_epi32(low,high);                     // pack with signed saturation
+}
+
+static inline Vec8us compress_saturated_s2u (Vec4i const & low, Vec4i const & high) {
+#if INSTRSET >= 5   // SSE4.1 supported
+    return  _mm_packus_epi32(low,high);                    // pack with unsigned saturation
+#else
+    __m128i low1  = _mm_slli_epi32(low,16);
+    __m128i high1 = _mm_slli_epi32(high,16);
+    __m128i low2  = _mm_srai_epi32(low1,16);
+    __m128i high2 = _mm_srai_epi32(high1,16);
+    return  _mm_packs_epi32(low2,high2);
+#endif
 }
 
 // Function compress : packs two vectors of 32-bit integers into one vector of 16-bit integers

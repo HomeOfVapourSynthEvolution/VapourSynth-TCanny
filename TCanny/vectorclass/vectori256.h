@@ -126,6 +126,10 @@ public:
     void store_a(void * p) const {
         _mm256_store_si256((__m256i*)p, ymm);
     }
+    // Member function to store into array using a non-temporal memory hint, aligned by 32
+    void stream(void * p) const {
+        _mm256_stream_si256((__m256i*)p, ymm);
+    }
     // Member function to change a single bit
     // Note: This function is inefficient. Use load function if changing more than one bit
     Vec256b const & set_bit(uint32_t index, int value) {
@@ -220,6 +224,10 @@ static inline Vec256b & operator ^= (Vec256b & a, Vec256b const & b) {
 }
 
 // Define functions for this class
+
+static inline Vec256b setzero_256b() {
+    return _mm256_setzero_si256();
+}
 
 // function andnot: a & ~ b
 static inline Vec256b andnot (Vec256b const & a, Vec256b const & b) {
@@ -4874,6 +4882,11 @@ static inline Vec32c compress_saturated (Vec16s const & low, Vec16s const & high
     return          _mm256_permute4x64_epi64(pk, 0xD8);       // put in right place
 }
 
+static inline Vec32uc compress_saturated_s2u (Vec16s const & low, Vec16s const & high) {
+    __m256i pk    = _mm256_packus_epi16(low,high);            // packed with unsigned saturation
+    return          _mm256_permute4x64_epi64(pk, 0xD8);       // put in right place
+}
+
 // Function compress : packs two vectors of 16-bit integers to one vector of 8-bit integers
 // Unsigned, overflow wraps around
 static inline Vec32uc compress (Vec16us const & low, Vec16us const & high) {
@@ -4909,6 +4922,11 @@ static inline Vec16s compress (Vec8i const & low, Vec8i const & high) {
 // Signed with saturation
 static inline Vec16s compress_saturated (Vec8i const & low, Vec8i const & high) {
     __m256i pk    =  _mm256_packs_epi32(low,high);            // pack with signed saturation
+    return           _mm256_permute4x64_epi64(pk, 0xD8);      // put in right place
+}
+
+static inline Vec16us compress_saturated_s2u (Vec8i const & low, Vec8i const & high) {
+    __m256i pk    =  _mm256_packus_epi32(low,high);           // pack with unsigned saturation
     return           _mm256_permute4x64_epi64(pk, 0xD8);      // put in right place
 }
 

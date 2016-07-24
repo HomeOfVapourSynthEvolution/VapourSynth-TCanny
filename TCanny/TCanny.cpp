@@ -46,6 +46,9 @@ struct TCannyData {
     float lower[3], upper[3];
 #ifdef VS_TARGET_CPU_X86
     void (*gaussianBlurVertical)(const uint8_t * srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride, const int blurStride, const int radius, const float offset);
+    void (*outputGB)(const float * blur, uint8_t * dstp, const int width, const int height, const int stride, const int blurStride, const int peak, const float offset, const float upper);
+    void (*binarizeCE)(const float * blur, uint8_t * dstp, const int width, const int height, const int stride, const int blurStride, const int peak, const float lower, const float upper);
+    void (*discretizeGM)(const float * gradient, uint8_t * dstp, const int width, const int height, const int stride, const float magnitude, const int peak, const float offset, const float upper);
 #endif
 };
 
@@ -56,8 +59,7 @@ struct Stack {
 };
 
 static inline void push(Stack & s, const int x, const int y) {
-    s.pos[++s.index].first = x;
-    s.pos[s.index].second = y;
+    s.pos[++s.index] = std::make_pair(x, y);
 }
 
 static inline std::pair<int, int> pop(Stack & s) {
@@ -90,13 +92,13 @@ static float * gaussianWeights(const float sigma, int * radius) {
 }
 
 template<typename T>
-static T getBin(const float dir, const int n) {
+static inline T getBin(const float dir, const int n) {
     const int bin = static_cast<int>(dir * n * M_1_PIF + 0.5f);
     return (bin >= n) ? 0 : bin;
 }
 
 template<>
-float getBin<float>(const float dir, const int n) {
+inline float getBin<float>(const float dir, const int n) {
     const float bin = dir * M_1_PIF;
     return (bin > n) ? 0.f : bin;
 }
@@ -109,14 +111,14 @@ static void gaussianBlurHorizontal(float * buffer, float * blur, const float * w
     }
 
     for (int x = 0; x < width; x += 8) {
-        Vec8f sum { 0.f };
+        Vec8f sum = setzero_8f();
 
         for (int i = -radius; i <= radius; i++) {
             const Vec8f srcp = Vec8f().load(buffer + x + i);
             sum = mul_add(srcp, weights[i], sum);
         }
 
-        sum.store_a(blur + x);
+        sum.stream(blur + x);
     }
 }
 
@@ -133,14 +135,14 @@ static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * buffer, f
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
-            Vec8f sum { 0.f };
+            Vec8f sum = setzero_8f();
 
             for (int i = 0; i < diameter; i++) {
 #if defined(__AVX2__)
-                const Vec8i srcp_8i = _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x)));
+                const Vec8i srcp_8i { _mm256_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x))) };
 #elif defined(__SSE4_1__)
-                const Vec8i srcp_8i = Vec8i(_mm_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x))),
-                                            _mm_cvtepu8_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x + 4))));
+                const Vec8i srcp_8i { _mm_cvtepu8_epi32(_mm_cvtsi32_si128(reinterpret_cast<const int32_t *>(_srcp[i] + x)[0])),
+                                      _mm_cvtepu8_epi32(_mm_cvtsi32_si128(reinterpret_cast<const int32_t *>(_srcp[i] + x + 4)[0])) };
 #else
                 const Vec16uc srcp_16uc { _mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x)) };
                 const Vec8us srcp_8us = extend_low(srcp_16uc);
@@ -180,13 +182,17 @@ static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * buffer, 
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
-            Vec8f sum { 0.f };
+            Vec8f sum = setzero_8f();
 
             for (int i = 0; i < diameter; i++) {
-                const Vec8us srcp_8us = Vec8us().load_a(_srcp[i] + x);
 #if defined(__AVX2__)
-                const Vec8i srcp_8i = _mm256_cvtepu16_epi32(srcp_8us);
+                const Vec8us srcp_8us = Vec8us().load_a(_srcp[i] + x);
+                const Vec8i srcp_8i { _mm256_cvtepu16_epi32(srcp_8us) };
+#elif defined(__SSE4_1__)
+                const Vec8i srcp_8i { _mm_cvtepu16_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x))),
+                                      _mm_cvtepu16_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x + 4))) };
 #else
+                const Vec8us srcp_8us = Vec8us().load_a(_srcp[i] + x);
                 const Vec8i srcp_8i = Vec8i(extend_low(srcp_8us), extend_high(srcp_8us));
 #endif
                 const Vec8f srcp = to_float(srcp_8i);
@@ -223,7 +229,7 @@ static void gaussianBlurVertical_float(const uint8_t * __srcp, float * buffer, f
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
-            Vec8f sum { 0.f };
+            Vec8f sum = setzero_8f();
 
             for (int i = 0; i < diameter; i++) {
                 const Vec8f srcp = Vec8f().load_a(_srcp[i] + x);
@@ -282,11 +288,11 @@ static void detectEdge(float * blur, float * gradient, float * direction, const 
                     - mul_add(3.f, Vec8f().load(srcpn + x - 1), mul_add(10.f, Vec8f().load_a(srcpn + x), 3.f * Vec8f().load(srcpn + x + 1)));
             }
 
-            sqrt(mul_add(gx, gx, gy * gy)).store_a(gradient + x);
+            sqrt(mul_add(gx, gx, gy * gy)).stream(gradient + x);
 
             if (mode != 1) {
                 const Vec8f dr = atan2(gy, gx);
-                if_add(dr < 0.f, dr, M_PIF).store_a(direction + x);
+                if_add(dr < 0.f, dr, M_PIF).stream(direction + x);
             }
         }
 
@@ -301,7 +307,7 @@ static void detectEdge(float * blur, float * gradient, float * direction, const 
 
 static void nonMaximumSuppression(const float * _gradient, const float * _direction, float * blur, const int width, const int height, const int stride, const int blurStride) {
     for (int x = 0; x < width; x += 8)
-        Vec8f(-FLT_MAX).store_a(blur + x);
+        Vec8f(-FLT_MAX).stream(blur + x);
 
     for (int y = 1; y < height - 1; y++) {
         _gradient += stride;
@@ -312,19 +318,19 @@ static void nonMaximumSuppression(const float * _gradient, const float * _direct
             const Vec8f direction = Vec8f().load(_direction + x);
             const Vec8i bin = truncate_to_int(mul_add(direction, 4.f * M_1_PIF, 0.5f));
 
-            Vec8fb mask { bin == 0 | bin >= 4 };
+            Vec8fb mask = Vec8fb(bin == 0 | bin >= 4);
             Vec8f gradient = max(Vec8f().load(_gradient + x + 1), Vec8f().load_a(_gradient + x - 1));
-            Vec8f result { gradient & mask };
+            Vec8f result = gradient & mask;
 
-            mask = bin == 1;
+            mask = Vec8fb(bin == 1);
             gradient = max(Vec8f().load(_gradient + x - stride + 1), Vec8f().load_a(_gradient + x + stride - 1));
             result |= gradient & mask;
 
-            mask = bin == 2;
+            mask = Vec8fb(bin == 2);
             gradient = max(Vec8f().load(_gradient + x - stride), Vec8f().load(_gradient + x + stride));
             result |= gradient & mask;
 
-            mask = bin == 3;
+            mask = Vec8fb(bin == 3);
             gradient = max(Vec8f().load_a(_gradient + x - stride - 1), Vec8f().load(_gradient + x + stride + 1));
             result |= gradient & mask;
 
@@ -338,7 +344,166 @@ static void nonMaximumSuppression(const float * _gradient, const float * _direct
     blur += blurStride;
 
     for (int x = 0; x < width; x += 8)
-        Vec8f(-FLT_MAX).store_a(blur + x);
+        Vec8f(-FLT_MAX).stream(blur + x);
+}
+
+static void outputGB_uint8(const float * blur, uint8_t * dstp, const int width, const int height, const int stride, const int blurStride,
+                           const int peak, const float offset, const float upper) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 32) {
+            const Vec8i srcp_8i_0 = truncate_to_int(Vec8f().load_a(blur + x) + 0.5f);
+            const Vec8i srcp_8i_1 = truncate_to_int(Vec8f().load_a(blur + x + 8) + 0.5f);
+            const Vec8i srcp_8i_2 = truncate_to_int(Vec8f().load_a(blur + x + 16) + 0.5f);
+            const Vec8i srcp_8i_3 = truncate_to_int(Vec8f().load_a(blur + x + 24) + 0.5f);
+            const Vec16s srcp_16s_0 = compress_saturated(srcp_8i_0, srcp_8i_1);
+            const Vec16s srcp_16s_1 = compress_saturated(srcp_8i_2, srcp_8i_3);
+            const Vec32uc srcp = compress_saturated_s2u(srcp_16s_0, srcp_16s_1);
+            srcp.stream(dstp + x);
+        }
+
+        blur += blurStride;
+        dstp += stride;
+    }
+}
+
+static void outputGB_uint16(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
+                            const int peak, const float offset, const float upper) {
+    uint16_t * dstp = reinterpret_cast<uint16_t *>(_dstp);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 16) {
+            const Vec8i srcp_8i_0 = truncate_to_int(Vec8f().load_a(blur + x) + 0.5f);
+            const Vec8i srcp_8i_1 = truncate_to_int(Vec8f().load_a(blur + x + 8) + 0.5f);
+            const Vec16us srcp = compress_saturated_s2u(srcp_8i_0, srcp_8i_1);
+            min(srcp, peak).stream(dstp + x);
+        }
+
+        blur += blurStride;
+        dstp += stride;
+    }
+}
+
+static void outputGB_float(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
+                           const int peak, const float offset, const float upper) {
+    float * dstp = reinterpret_cast<float *>(_dstp);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 8) {
+            const Vec8f srcp = Vec8f().load_a(blur + x);
+            min(srcp - offset, upper).stream(dstp + x);
+        }
+
+        blur += blurStride;
+        dstp += stride;
+    }
+}
+
+static void binarizeCE_uint8(const float * blur, uint8_t * dstp, const int width, const int height, const int stride, const int blurStride,
+                             const int peak, const float lower, const float upper) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 32) {
+            const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == FLT_MAX);
+            const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == FLT_MAX);
+            const Vec8ib mask_8ib_2 = Vec8ib(Vec8f().load_a(blur + x + 16) == FLT_MAX);
+            const Vec8ib mask_8ib_3 = Vec8ib(Vec8f().load_a(blur + x + 24) == FLT_MAX);
+            const Vec16sb mask_16sb_0 = Vec16sb(compress_saturated(mask_8ib_0, mask_8ib_1));
+            const Vec16sb mask_16sb_1 = Vec16sb(compress_saturated(mask_8ib_2, mask_8ib_3));
+            const Vec32cb mask = Vec32cb(compress_saturated(mask_16sb_0, mask_16sb_1));
+            select(mask, Vec32uc(255), Vec32uc(0)).stream(dstp + x);
+        }
+
+        blur += blurStride;
+        dstp += stride;
+    }
+}
+
+static void binarizeCE_uint16(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
+                              const int peak, const float lower, const float upper) {
+    uint16_t * dstp = reinterpret_cast<uint16_t *>(_dstp);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 16) {
+            const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == FLT_MAX);
+            const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == FLT_MAX);
+            const Vec16sb mask = Vec16sb(compress_saturated(mask_8ib_0, mask_8ib_1));
+            select(mask, Vec16us(peak), Vec16us(0)).stream(dstp + x);
+        }
+
+        blur += blurStride;
+        dstp += stride;
+    }
+}
+
+static void binarizeCE_float(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
+                             const int peak, const float lower, const float upper) {
+    float * dstp = reinterpret_cast<float *>(_dstp);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 8) {
+            const Vec8fb mask = Vec8f().load_a(blur + x) == FLT_MAX;
+            select(mask, Vec8f(upper), Vec8f(lower)).stream(dstp + x);
+        }
+
+        blur += blurStride;
+        dstp += stride;
+    }
+}
+
+static void discretizeGM_uint8(const float * gradient, uint8_t * dstp, const int width, const int height, const int stride,
+                               const float magnitude, const int peak, const float offset, const float upper) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 32) {
+            const Vec8f srcp_8f_0 = Vec8f().load_a(gradient + x);
+            const Vec8f srcp_8f_1 = Vec8f().load_a(gradient + x + 8);
+            const Vec8f srcp_8f_2 = Vec8f().load_a(gradient + x + 16);
+            const Vec8f srcp_8f_3 = Vec8f().load_a(gradient + x + 24);
+            const Vec8i srcp_8i_0 = truncate_to_int(mul_add(srcp_8f_0, magnitude, 0.5f));
+            const Vec8i srcp_8i_1 = truncate_to_int(mul_add(srcp_8f_1, magnitude, 0.5f));
+            const Vec8i srcp_8i_2 = truncate_to_int(mul_add(srcp_8f_2, magnitude, 0.5f));
+            const Vec8i srcp_8i_3 = truncate_to_int(mul_add(srcp_8f_3, magnitude, 0.5f));
+            const Vec16s srcp_16s_0 = compress_saturated(srcp_8i_0, srcp_8i_1);
+            const Vec16s srcp_16s_1 = compress_saturated(srcp_8i_2, srcp_8i_3);
+            const Vec32uc srcp = compress_saturated_s2u(srcp_16s_0, srcp_16s_1);
+            srcp.stream(dstp + x);
+        }
+
+        gradient += stride;
+        dstp += stride;
+    }
+}
+
+static void discretizeGM_uint16(const float * gradient, uint8_t * _dstp, const int width, const int height, const int stride,
+                                const float magnitude, const int peak, const float offset, const float upper) {
+    uint16_t * dstp = reinterpret_cast<uint16_t *>(_dstp);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 16) {
+            const Vec8f srcp_8f_0 = Vec8f().load_a(gradient + x);
+            const Vec8f srcp_8f_1 = Vec8f().load_a(gradient + x + 8);
+            const Vec8i srcp_8i_0 = truncate_to_int(mul_add(srcp_8f_0, magnitude, 0.5f));
+            const Vec8i srcp_8i_1 = truncate_to_int(mul_add(srcp_8f_1, magnitude, 0.5f));
+            const Vec16us srcp = compress_saturated_s2u(srcp_8i_0, srcp_8i_1);
+            min(srcp, peak).stream(dstp + x);
+        }
+
+        gradient += stride;
+        dstp += stride;
+    }
+}
+
+static void discretizeGM_float(const float * gradient, uint8_t * _dstp, const int width, const int height, const int stride,
+                               const float magnitude, const int peak, const float offset, const float upper) {
+    float * dstp = reinterpret_cast<float *>(_dstp);
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 8) {
+            const Vec8f srcp = Vec8f().load_a(gradient + x);
+            min(mul_sub(srcp, magnitude, offset), upper).stream(dstp + x);
+        }
+
+        gradient += stride;
+        dstp += stride;
+    }
 }
 #else
 static void gaussianBlurHorizontal(float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int radius) {
@@ -498,44 +663,13 @@ static void nonMaximumSuppression(const float * gradient, const float * directio
 
     std::fill_n(blur + blurStride, width, -FLT_MAX);
 }
-#endif
-
-static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const int width, const int height, const int blurStride, const float t_h, const float t_l) {
-    memset(stack.map, 0, width * height);
-    stack.index = -1;
-
-    for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
-            if (blur[x + blurStride * y] < t_h || stack.map[x + width * y])
-                continue;
-
-            blur[x + blurStride * y] = FLT_MAX;
-            stack.map[x + width * y] = UINT8_MAX;
-            push(stack, x, y);
-
-            while (stack.index > -1) {
-                const std::pair<int, int> pos = pop(stack);
-
-                for (int yy = pos.second - 1; yy <= pos.second + 1; yy++) {
-                    for (int xx = pos.first - 1; xx <= pos.first + 1; xx++) {
-                        if (blur[xx + blurStride * yy] >= t_l && !stack.map[xx + width * yy]) {
-                            blur[xx + blurStride * yy] = FLT_MAX;
-                            stack.map[xx + width * yy] = UINT8_MAX;
-                            push(stack, xx, yy);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 template<typename T>
 static void outputGB(const float * blur, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                     const int peak, const float offset, const float lower, const float upper) {
+                     const int peak, const float offset, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = std::min(std::max(static_cast<int>(blur[x] + 0.5f), 0), peak);
+            dstp[x] = std::min(static_cast<int>(blur[x] + 0.5f), peak);
 
         blur += blurStride;
         dstp += stride;
@@ -544,10 +678,10 @@ static void outputGB(const float * blur, T * VS_RESTRICT dstp, const int width, 
 
 template<>
 void outputGB<float>(const float * blur, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                     const int peak, const float offset, const float lower, const float upper) {
+                     const int peak, const float offset, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = std::min(std::max(blur[x] - offset, lower), upper);
+            dstp[x] = std::min(blur[x] - offset, upper);
 
         blur += blurStride;
         dstp += stride;
@@ -556,10 +690,10 @@ void outputGB<float>(const float * blur, float * VS_RESTRICT dstp, const int wid
 
 template<typename T>
 static void binarizeCE(const float * blur, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                       const float t_h, const T peak, const float lower, const float upper) {
+                       const T peak, const float lower, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (blur[x] >= t_h) ? peak : 0;
+            dstp[x] = (blur[x] == FLT_MAX) ? peak : 0;
 
         blur += blurStride;
         dstp += stride;
@@ -568,10 +702,10 @@ static void binarizeCE(const float * blur, T * VS_RESTRICT dstp, const int width
 
 template<>
 void binarizeCE<float>(const float * blur, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                       const float t_h, const float peak, const float lower, const float upper) {
+                       const float peak, const float lower, const float upper) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (blur[x] >= t_h) ? upper : lower;
+            dstp[x] = (blur[x] == FLT_MAX) ? upper : lower;
 
         blur += blurStride;
         dstp += stride;
@@ -601,13 +735,44 @@ void discretizeGM<float>(const float * gradient, float * VS_RESTRICT dstp, const
         dstp += stride;
     }
 }
+#endif
+
+static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const int width, const int height, const int blurStride, const float t_h, const float t_l) {
+    memset(stack.map, 0, width * height);
+    stack.index = -1;
+
+    for (int y = 1; y < height - 1; y++) {
+        for (int x = 1; x < width - 1; x++) {
+            if (blur[blurStride * y + x] < t_h || stack.map[width * y + x])
+                continue;
+
+            blur[blurStride * y + x] = FLT_MAX;
+            stack.map[width * y + x] = UINT8_MAX;
+            push(stack, x, y);
+
+            while (stack.index > -1) {
+                const std::pair<int, int> pos = pop(stack);
+
+                for (int yy = pos.second - 1; yy <= pos.second + 1; yy++) {
+                    for (int xx = pos.first - 1; xx <= pos.first + 1; xx++) {
+                        if (blur[blurStride * yy + xx] >= t_l && !stack.map[width * yy + xx]) {
+                            blur[blurStride * yy + xx] = FLT_MAX;
+                            stack.map[width * yy + xx] = UINT8_MAX;
+                            push(stack, xx, yy);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 template<typename T>
 static void discretizeDM_T(const float * blur, const float * direction, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                           const float t_h, const int bins, const float offset, const float lower) {
+                           const int bins, const float offset, const float lower) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (blur[x] >= t_h) ? getBin<T>(direction[x], bins) : 0;
+            dstp[x] = (blur[x] == FLT_MAX) ? getBin<T>(direction[x], bins) : 0;
 
         blur += blurStride;
         direction += stride;
@@ -617,10 +782,10 @@ static void discretizeDM_T(const float * blur, const float * direction, T * VS_R
 
 template<>
 void discretizeDM_T<float>(const float * blur, const float * direction, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                           const float t_h, const int bins, const float offset, const float lower) {
+                           const int bins, const float offset, const float lower) {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
-            dstp[x] = (blur[x] >= t_h) ? getBin<float>(direction[x], bins) - offset : lower;
+            dstp[x] = (blur[x] == FLT_MAX) ? getBin<float>(direction[x], bins) - offset : lower;
 
         blur += blurStride;
         direction += stride;
@@ -660,7 +825,7 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, fl
             const int stride = vsapi->getStride(src, plane) / sizeof(T);
             const int blurStride = stride + 16;
             const uint8_t * srcp = vsapi->getReadPtr(src, plane);
-            T * dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
+            uint8_t * dstp = vsapi->getWritePtr(dst, plane);
             const float offset = (d->vi->format->sampleType == stInteger || plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.f : 0.5f;
 
 #ifdef VS_TARGET_CPU_X86
@@ -677,16 +842,25 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, fl
                 hysteresis(blur, stack, width, height, blurStride, d->t_h, d->t_l);
             }
 
+#ifdef VS_TARGET_CPU_X86
             if (d->mode == -1)
-                outputGB<T>(blur, dstp, width, height, stride, blurStride, d->peak, offset, d->lower[plane], d->upper[plane]);
+                d->outputGB(blur, dstp, width, height, stride, blurStride, d->peak, offset, d->upper[plane]);
             else if (d->mode == 0)
-                binarizeCE<T>(blur, dstp, width, height, stride, blurStride, d->t_h, d->peak, d->lower[plane], d->upper[plane]);
+                d->binarizeCE(blur, dstp, width, height, stride, blurStride, d->peak, d->lower[plane], d->upper[plane]);
             else if (d->mode == 1)
-                discretizeGM<T>(gradient, dstp, width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
+                d->discretizeGM(gradient, dstp, width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
+#else
+            if (d->mode == -1)
+                outputGB<T>(blur, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->peak, offset, d->upper[plane]);
+            else if (d->mode == 0)
+                binarizeCE<T>(blur, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->peak, d->lower[plane], d->upper[plane]);
+            else if (d->mode == 1)
+                discretizeGM<T>(gradient, reinterpret_cast<T *>(dstp), width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
+#endif
             else if (d->mode == 2)
-                discretizeDM_T<T>(blur, direction, dstp, width, height, stride, blurStride, d->t_h, d->bins, offset, d->lower[plane]);
+                discretizeDM_T<T>(blur, direction, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->bins, offset, d->lower[plane]);
             else
-                discretizeDM<T>(direction, dstp, width, height, stride, d->bins, offset);
+                discretizeDM<T>(direction, reinterpret_cast<T *>(dstp), width, height, stride, d->bins, offset);
         }
     }
 }
@@ -883,10 +1057,17 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         d.peak = d.bins - 1;
 
 #ifdef VS_TARGET_CPU_X86
-        if (d.vi->format->bitsPerSample == 8)
+        if (d.vi->format->bitsPerSample == 8) {
             d.gaussianBlurVertical = gaussianBlurVertical_uint8;
-        else
+            d.outputGB = outputGB_uint8;
+            d.binarizeCE = binarizeCE_uint8;
+            d.discretizeGM = discretizeGM_uint8;
+        } else {
             d.gaussianBlurVertical = gaussianBlurVertical_uint16;
+            d.outputGB = outputGB_uint16;
+            d.binarizeCE = binarizeCE_uint16;
+            d.discretizeGM = discretizeGM_uint16;
+        }
 #endif
     } else {
         d.t_h /= 255.f;
@@ -907,6 +1088,9 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
 #ifdef VS_TARGET_CPU_X86
         d.gaussianBlurVertical = gaussianBlurVertical_float;
+        d.outputGB = outputGB_float;
+        d.binarizeCE = binarizeCE_float;
+        d.discretizeGM = discretizeGM_float;
 #endif
     }
 

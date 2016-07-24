@@ -126,6 +126,11 @@ public:
         _mm_store_si128((__m128i*)p,     y0);
         _mm_store_si128((__m128i*)p + 1, y1);
     }
+    // Member function to store into array using a non-temporal memory hint, aligned by 32
+    void stream(void * p) const {
+        _mm_stream_si128((__m128i*)p,     y0);
+        _mm_stream_si128((__m128i*)p + 1, y1);
+    }
     // Member function to change a single bit
     // Note: This function is inefficient. Use load function if changing more than one bit
     Vec256b const & set_bit(uint32_t index, int value) {
@@ -211,6 +216,10 @@ static inline Vec256b & operator ^= (Vec256b & a, Vec256b const & b) {
 }
 
 // Define functions for this class
+
+static inline Vec256b setzero_256b() {
+    return Vec256b(_mm_setzero_si128(), _mm_setzero_si128());
+}
 
 // function andnot: a & ~ b
 static inline Vec256b andnot (Vec256b const & a, Vec256b const & b) {
@@ -3976,6 +3985,10 @@ static inline Vec32c compress_saturated (Vec16s const & low, Vec16s const & high
     return Vec32c(compress_saturated(low.get_low(),low.get_high()), compress_saturated(high.get_low(),high.get_high()));
 }
 
+static inline Vec32uc compress_saturated_s2u (Vec16s const & low, Vec16s const & high) {
+    return Vec32uc(compress_saturated_s2u(low.get_low(),low.get_high()), compress_saturated_s2u(high.get_low(),high.get_high()));
+}
+
 // Function compress : packs two vectors of 16-bit integers to one vector of 8-bit integers
 // Unsigned, overflow wraps around
 static inline Vec32uc compress (Vec16us const & low, Vec16us const & high) {
@@ -4000,6 +4013,10 @@ static inline Vec16s compress (Vec8i const & low, Vec8i const & high) {
 // Signed with saturation
 static inline Vec16s compress_saturated (Vec8i const & low, Vec8i const & high) {
     return Vec16s(compress_saturated(low.get_low(),low.get_high()), compress_saturated(high.get_low(),high.get_high()));
+}
+
+static inline Vec16us compress_saturated_s2u (Vec8i const & low, Vec8i const & high) {
+    return Vec16us(compress_saturated_s2u(low.get_low(),low.get_high()), compress_saturated_s2u(high.get_low(),high.get_high()));
 }
 
 // Function compress : packs two vectors of 32-bit integers into one vector of 16-bit integers

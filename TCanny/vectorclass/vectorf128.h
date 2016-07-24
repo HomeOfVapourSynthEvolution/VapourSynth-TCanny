@@ -496,6 +496,10 @@ public:
     void store_a(float * p) const {
         _mm_store_ps(p, xmm);
     }
+    // Member function to store into array using a non-temporal memory hint, aligned by 16
+    void stream(float * p) const {
+        _mm_stream_ps(p, xmm);
+    }
     // Partial load. Load n elements and set the rest to 0
     Vec4f & load_partial(int n, float const * p) {
         __m128 t1, t2;
@@ -779,6 +783,10 @@ static inline Vec4fb operator ! (Vec4f const & a) {
 *          Functions for Vec4f
 *
 *****************************************************************************/
+
+static inline Vec4f setzero_4f() {
+    return _mm_setzero_ps();
+}
 
 // Select between two operands. Corresponds to this pseudocode:
 // for (int i = 0; i < 4; i++) result[i] = s[i] ? a[i] : b[i];

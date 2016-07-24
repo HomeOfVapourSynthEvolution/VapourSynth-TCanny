@@ -594,6 +594,10 @@ public:
     void store_a(float * p) const {
         _mm256_store_ps(p, ymm);
     }
+    // Member function to store into array using a non-temporal memory hint, aligned by 32
+    void stream(float * p) const {
+        _mm256_stream_ps(p, ymm);
+    }
     // Partial load. Load n elements and set the rest to 0
     Vec8f & load_partial(int n, float const * p) {
         if (n > 0 && n <= 4) {
@@ -874,6 +878,10 @@ static inline Vec8fb operator ! (Vec8f const & a) {
 *          Functions for Vec8f
 *
 *****************************************************************************/
+
+static inline Vec8f setzero_8f() {
+    return _mm256_setzero_ps();
+}
 
 // Select between two operands. Corresponds to this pseudocode:
 // for (int i = 0; i < 8; i++) result[i] = s[i] ? a[i] : b[i];
