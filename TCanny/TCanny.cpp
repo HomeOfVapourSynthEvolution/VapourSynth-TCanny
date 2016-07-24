@@ -515,14 +515,10 @@ static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, cons
 
             while (stack.index > -1) {
                 const std::pair<int, int> pos = pop(stack);
-                const int xMin = (pos.first > 1) ? pos.first - 1 : 1;
-                const int xMax = (pos.first < width - 2) ? pos.first + 1 : pos.first;
-                const int yMin = (pos.second > 1) ? pos.second - 1 : 1;
-                const int yMax = (pos.second < height - 2) ? pos.second + 1 : pos.second;
 
-                for (int yy = yMin; yy <= yMax; yy++) {
-                    for (int xx = xMin; xx <= xMax; xx++) {
-                        if (blur[xx + blurStride * yy] > t_l && !stack.map[xx + width * yy]) {
+                for (int yy = pos.second - 1; yy <= pos.second + 1; yy++) {
+                    for (int xx = pos.first - 1; xx <= pos.first + 1; xx++) {
+                        if (blur[xx + blurStride * yy] >= t_l && !stack.map[xx + width * yy]) {
                             blur[xx + blurStride * yy] = FLT_MAX;
                             stack.map[xx + width * yy] = UINT8_MAX;
                             push(stack, xx, yy);
@@ -824,6 +820,11 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
     if (d.sigma <= 0.f) {
         vsapi->setError(out, "TCanny: sigma must be greater than 0.0");
+        return;
+    }
+
+    if (d.t_l >= d.t_h) {
+        vsapi->setError(out, "TCanny: t_h must be greater than t_l");
         return;
     }
 
