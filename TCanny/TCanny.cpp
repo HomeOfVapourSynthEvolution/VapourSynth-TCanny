@@ -89,6 +89,18 @@ static float * gaussianWeights(const float sigma, int * radius) {
     return weights;
 }
 
+template<typename T>
+static T getBin(const float dir, const int n) {
+    const int bin = static_cast<int>(dir * n * M_1_PIF + 0.5f);
+    return (bin >= n) ? 0 : bin;
+}
+
+template<>
+float getBin<float>(const float dir, const int n) {
+    const float bin = dir * M_1_PIF;
+    return (bin > n) ? 0.f : bin;
+}
+
 #ifdef VS_TARGET_CPU_X86
 static void gaussianBlurHorizontal(float * buffer, float * blur, const float * weights, const int width, const int radius) {
     for (int i = 1; i <= radius; i++) {
@@ -286,6 +298,48 @@ static void detectEdge(float * blur, float * gradient, float * direction, const 
         direction += stride;
     }
 }
+
+static void nonMaximumSuppression(const float * _gradient, const float * _direction, float * blur, const int width, const int height, const int stride, const int blurStride) {
+    for (int x = 0; x < width; x += 8)
+        Vec8f(-FLT_MAX).store_a(blur + x);
+
+    for (int y = 1; y < height - 1; y++) {
+        _gradient += stride;
+        _direction += stride;
+        blur += blurStride;
+
+        for (int x = 1; x < width - 1; x += 8) {
+            const Vec8f direction = Vec8f().load(_direction + x);
+            const Vec8i bin = truncate_to_int(mul_add(direction, 4.f * M_1_PIF, 0.5f));
+
+            Vec8fb mask { bin == 0 | bin >= 4 };
+            Vec8f gradient = max(Vec8f().load(_gradient + x + 1), Vec8f().load_a(_gradient + x - 1));
+            Vec8f result { gradient & mask };
+
+            mask = bin == 1;
+            gradient = max(Vec8f().load(_gradient + x - stride + 1), Vec8f().load_a(_gradient + x + stride - 1));
+            result |= gradient & mask;
+
+            mask = bin == 2;
+            gradient = max(Vec8f().load(_gradient + x - stride), Vec8f().load(_gradient + x + stride));
+            result |= gradient & mask;
+
+            mask = bin == 3;
+            gradient = max(Vec8f().load_a(_gradient + x - stride - 1), Vec8f().load(_gradient + x + stride + 1));
+            result |= gradient & mask;
+
+            gradient = Vec8f().load(_gradient + x);
+            select(gradient >= result, gradient, -FLT_MAX).store(blur + x);
+        }
+
+        blur[0] = blur[width - 1] = -FLT_MAX;
+    }
+
+    blur += blurStride;
+
+    for (int x = 0; x < width; x += 8)
+        Vec8f(-FLT_MAX).store_a(blur + x);
+}
 #else
 static void gaussianBlurHorizontal(float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int radius) {
     for (int i = 1; i <= radius; i++) {
@@ -423,24 +477,11 @@ static void detectEdge(float * blur, float * VS_RESTRICT gradient, float * VS_RE
         direction += stride;
     }
 }
-#endif
-
-template<typename T>
-static T getBin(const float dir, const int n) {
-    const int bin = static_cast<int>(dir * n * M_1_PIF + 0.5f);
-    return (bin >= n) ? 0 : bin;
-}
-
-template<>
-float getBin<float>(const float dir, const int n) {
-    const float bin = dir * M_1_PIF;
-    return (bin > n) ? 0.f : bin;
-}
 
 static void nonMaximumSuppression(const float * gradient, const float * direction, float * VS_RESTRICT blur, const int width, const int height, const int stride, const int blurStride) {
     const int offsets[] { 1, -stride + 1, -stride, -stride - 1 };
 
-    memset(blur, 0, width * sizeof(float));
+    std::fill_n(blur, width, -FLT_MAX);
 
     for (int y = 1; y < height - 1; y++) {
         gradient += stride;
@@ -449,14 +490,15 @@ static void nonMaximumSuppression(const float * gradient, const float * directio
 
         for (int x = 1; x < width - 1; x++) {
             const int offset = offsets[getBin<int>(direction[x], 4)];
-            blur[x] = (gradient[x] >= std::max(gradient[x + offset], gradient[x - offset])) ? gradient[x] : 0.f;
+            blur[x] = (gradient[x] >= std::max(gradient[x + offset], gradient[x - offset])) ? gradient[x] : -FLT_MAX;
         }
 
-        blur[0] = blur[width - 1] = 0.f;
+        blur[0] = blur[width - 1] = -FLT_MAX;
     }
 
-    memset(blur + blurStride, 0, width * sizeof(float));
+    std::fill_n(blur + blurStride, width, -FLT_MAX);
 }
+#endif
 
 static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const int width, const int height, const int blurStride, const float t_h, const float t_l) {
     memset(stack.map, 0, width * height);
@@ -692,7 +734,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
         float * gradient = nullptr, * direction = nullptr;
         if (d->mode != -1) {
-            gradient = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
+            gradient = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
             if (!gradient) {
                 vsapi->setFilterError("TCanny: malloc failure (gradient)", frameCtx);
                 vsapi->freeFrame(src);
@@ -701,7 +743,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
             }
 
             if (d->mode != 1) {
-                direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
+                direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
                 if (!direction) {
                     vsapi->setFilterError("TCanny: malloc failure (direction)", frameCtx);
                     vsapi->freeFrame(src);
