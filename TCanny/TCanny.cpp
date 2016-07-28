@@ -43,7 +43,7 @@ struct TCannyData {
     float * weights;
     float magnitude;
     int peak;
-    float lower[3], upper[3];
+    float offset[3], lower[3], upper[3];
 #ifdef VS_TARGET_CPU_X86
     void (*gaussianBlurVertical)(const uint8_t * srcp, float * buffer, float * dstp, const float * weights, const int width, const int height, const int stride, const int blurStride, const int radius, const float offset);
     void (*outputGB)(const float * blur, uint8_t * dstp, const int width, const int height, const int stride, const int blurStride, const int peak, const float offset, const float upper);
@@ -826,12 +826,11 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, fl
             const int blurStride = stride + 16;
             const uint8_t * srcp = vsapi->getReadPtr(src, plane);
             uint8_t * dstp = vsapi->getWritePtr(dst, plane);
-            const float offset = (d->vi->format->sampleType == stInteger || plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.f : 0.5f;
 
 #ifdef VS_TARGET_CPU_X86
-            d->gaussianBlurVertical(srcp, buffer, blur, d->weights, width, height, stride, blurStride, d->radius, offset);
+            d->gaussianBlurVertical(srcp, buffer, blur, d->weights, width, height, stride, blurStride, d->radius, d->offset[plane]);
 #else
-            gaussianBlurVertical<T>(reinterpret_cast<const T *>(srcp), buffer, blur, d->weights, width, height, stride, blurStride, d->radius, offset);
+            gaussianBlurVertical<T>(reinterpret_cast<const T *>(srcp), buffer, blur, d->weights, width, height, stride, blurStride, d->radius, d->offset[plane]);
 #endif
 
             if (d->mode != -1)
@@ -844,23 +843,23 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, fl
 
 #ifdef VS_TARGET_CPU_X86
             if (d->mode == -1)
-                d->outputGB(blur, dstp, width, height, stride, blurStride, d->peak, offset, d->upper[plane]);
+                d->outputGB(blur, dstp, width, height, stride, blurStride, d->peak, d->offset[plane], d->upper[plane]);
             else if (d->mode == 0)
                 d->binarizeCE(blur, dstp, width, height, stride, blurStride, d->peak, d->lower[plane], d->upper[plane]);
             else if (d->mode == 1)
-                d->discretizeGM(gradient, dstp, width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
+                d->discretizeGM(gradient, dstp, width, height, stride, d->magnitude, d->peak, d->offset[plane], d->upper[plane]);
 #else
             if (d->mode == -1)
-                outputGB<T>(blur, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->peak, offset, d->upper[plane]);
+                outputGB<T>(blur, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->peak, d->offset[plane], d->upper[plane]);
             else if (d->mode == 0)
                 binarizeCE<T>(blur, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->peak, d->lower[plane], d->upper[plane]);
             else if (d->mode == 1)
-                discretizeGM<T>(gradient, reinterpret_cast<T *>(dstp), width, height, stride, d->magnitude, d->peak, offset, d->upper[plane]);
+                discretizeGM<T>(gradient, reinterpret_cast<T *>(dstp), width, height, stride, d->magnitude, d->peak, d->offset[plane], d->upper[plane]);
 #endif
             else if (d->mode == 2)
-                discretizeDM_T<T>(blur, direction, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->bins, offset, d->lower[plane]);
+                discretizeDM_T<T>(blur, direction, reinterpret_cast<T *>(dstp), width, height, stride, blurStride, d->bins, d->offset[plane], d->lower[plane]);
             else
-                discretizeDM<T>(direction, reinterpret_cast<T *>(dstp), width, height, stride, d->bins, offset);
+                discretizeDM<T>(direction, reinterpret_cast<T *>(dstp), width, height, stride, d->bins, d->offset[plane]);
         }
     }
 }
@@ -1077,9 +1076,11 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         for (int plane = 0; plane < d.vi->format->numPlanes; plane++) {
             if (d.process[plane]) {
                 if (plane == 0 || d.vi->format->colorFamily == cmRGB) {
+                    d.offset[plane] = 0.f;
                     d.lower[plane] = 0.f;
                     d.upper[plane] = 1.f;
                 } else {
+                    d.offset[plane] = 0.5f;
                     d.lower[plane] = -0.5f;
                     d.upper[plane] = 0.5f;
                 }
