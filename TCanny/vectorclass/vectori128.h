@@ -5184,11 +5184,10 @@ static inline Vec8us compress_saturated_s2u (Vec4i const & low, Vec4i const & hi
 #if INSTRSET >= 5   // SSE4.1 supported
     return  _mm_packus_epi32(low,high);                    // pack with unsigned saturation
 #else
-    __m128i low1  = _mm_slli_epi32(low,16);
-    __m128i high1 = _mm_slli_epi32(high,16);
-    __m128i low2  = _mm_srai_epi32(low1,16);
-    __m128i high2 = _mm_srai_epi32(high1,16);
-    return  _mm_packs_epi32(low2,high2);
+    __m128i signbit = _mm_set1_epi32(0x8000);
+    __m128i low1    = _mm_sub_epi32(low,signbit);
+    __m128i high1   = _mm_sub_epi32(high,signbit);
+    return  _mm_xor_si128(_mm_packs_epi32(low1,high1),_mm_set1_epi16(-0x8000));
 #endif
 }
 
