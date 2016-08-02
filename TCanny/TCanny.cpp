@@ -58,19 +58,19 @@ struct Stack {
     int index;
 };
 
-static inline void push(Stack & s, const int x, const int y) {
+static inline void push(Stack & s, const int x, const int y) noexcept {
     s.pos[++s.index] = std::make_pair(x, y);
 }
 
-static inline std::pair<int, int> pop(Stack & s) {
+static inline std::pair<int, int> pop(Stack & s) noexcept {
     return s.pos[s.index--];
 }
 
-static inline float scale(const float val, const int bits) {
+static inline float scale(const float val, const int bits) noexcept {
     return val * ((1 << bits) - 1) / 255.f;
 }
 
-static float * gaussianWeights(const float sigma, int * radius) {
+static float * gaussianWeights(const float sigma, int * radius) noexcept {
     const int diameter = std::max(static_cast<int>(sigma * 3.f + 0.5f), 1) * 2 + 1;
     *radius = diameter / 2;
     float sum = 0.f;
@@ -92,19 +92,19 @@ static float * gaussianWeights(const float sigma, int * radius) {
 }
 
 template<typename T>
-static inline T getBin(const float dir, const int n) {
+static inline T getBin(const float dir, const int n) noexcept {
     const int bin = static_cast<int>(dir * n * M_1_PIF + 0.5f);
     return (bin >= n) ? 0 : bin;
 }
 
 template<>
-inline float getBin<float>(const float dir, const int n) {
+inline float getBin<float>(const float dir, const int n) noexcept {
     const float bin = dir * M_1_PIF;
     return (bin > n) ? 0.f : bin;
 }
 
 #ifdef VS_TARGET_CPU_X86
-static void gaussianBlurHorizontal(float * buffer, float * blur, const float * weights, const int width, const int radius) {
+static void gaussianBlurHorizontal(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
         buffer[-i] = buffer[i - 1];
         buffer[width - 1 + i] = buffer[width - i];
@@ -123,7 +123,7 @@ static void gaussianBlurHorizontal(float * buffer, float * blur, const float * w
 }
 
 static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * buffer, float * blur, const float * weights, const int width, const int height,
-                                       const int stride, const int blurStride, const int radius, const float offset) {
+                                       const int stride, const int blurStride, const int radius, const float offset) noexcept {
     const int diameter = radius * 2 + 1;
     const uint8_t ** _srcp = new const uint8_t *[diameter];
 
@@ -170,7 +170,7 @@ static void gaussianBlurVertical_uint8(const uint8_t * __srcp, float * buffer, f
 }
 
 static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * buffer, float * blur, const float * weights, const int width, const int height,
-                                        const int stride, const int blurStride, const int radius, const float offset) {
+                                        const int stride, const int blurStride, const int radius, const float offset) noexcept {
     const int diameter = radius * 2 + 1;
     const uint16_t ** _srcp = new const uint16_t *[diameter];
 
@@ -217,7 +217,7 @@ static void gaussianBlurVertical_uint16(const uint8_t * __srcp, float * buffer, 
 }
 
 static void gaussianBlurVertical_float(const uint8_t * __srcp, float * buffer, float * blur, const float * weights, const int width, const int height,
-                                       const int stride, const int blurStride, const int radius, const float offset) {
+                                       const int stride, const int blurStride, const int radius, const float offset) noexcept {
     const int diameter = radius * 2 + 1;
     const float ** _srcp = new const float *[diameter];
 
@@ -253,7 +253,8 @@ static void gaussianBlurVertical_float(const uint8_t * __srcp, float * buffer, f
     delete[] _srcp;
 }
 
-static void detectEdge(float * blur, float * gradient, float * direction, const int width, const int height, const int stride, const int blurStride, const int mode, const int op) {
+static void detectEdge(float * blur, float * gradient, float * direction, const int width, const int height,
+                       const int stride, const int blurStride, const int mode, const int op) noexcept {
     float * srcpp = blur;
     float * srcp = blur;
     float * srcpn = blur + blurStride;
@@ -305,7 +306,7 @@ static void detectEdge(float * blur, float * gradient, float * direction, const 
     }
 }
 
-static void nonMaximumSuppression(const float * _gradient, const float * _direction, float * blur, const int width, const int height, const int stride, const int blurStride) {
+static void nonMaximumSuppression(const float * _gradient, const float * _direction, float * blur, const int width, const int height, const int stride, const int blurStride) noexcept {
     for (int x = 0; x < width; x += 8)
         Vec8f(-FLT_MAX).stream(blur + x);
 
@@ -348,7 +349,7 @@ static void nonMaximumSuppression(const float * _gradient, const float * _direct
 }
 
 static void outputGB_uint8(const float * blur, uint8_t * dstp, const int width, const int height, const int stride, const int blurStride,
-                           const int peak, const float offset, const float upper) {
+                           const int peak, const float offset, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 32) {
             const Vec8i srcp_8i_0 = truncate_to_int(Vec8f().load_a(blur + x) + 0.5f);
@@ -367,7 +368,7 @@ static void outputGB_uint8(const float * blur, uint8_t * dstp, const int width, 
 }
 
 static void outputGB_uint16(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
-                            const int peak, const float offset, const float upper) {
+                            const int peak, const float offset, const float upper) noexcept {
     uint16_t * dstp = reinterpret_cast<uint16_t *>(_dstp);
 
     for (int y = 0; y < height; y++) {
@@ -384,7 +385,7 @@ static void outputGB_uint16(const float * blur, uint8_t * _dstp, const int width
 }
 
 static void outputGB_float(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
-                           const int peak, const float offset, const float upper) {
+                           const int peak, const float offset, const float upper) noexcept {
     float * dstp = reinterpret_cast<float *>(_dstp);
 
     for (int y = 0; y < height; y++) {
@@ -399,7 +400,7 @@ static void outputGB_float(const float * blur, uint8_t * _dstp, const int width,
 }
 
 static void binarizeCE_uint8(const float * blur, uint8_t * dstp, const int width, const int height, const int stride, const int blurStride,
-                             const int peak, const float lower, const float upper) {
+                             const int peak, const float lower, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 32) {
             const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == FLT_MAX);
@@ -418,7 +419,7 @@ static void binarizeCE_uint8(const float * blur, uint8_t * dstp, const int width
 }
 
 static void binarizeCE_uint16(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
-                              const int peak, const float lower, const float upper) {
+                              const int peak, const float lower, const float upper) noexcept {
     uint16_t * dstp = reinterpret_cast<uint16_t *>(_dstp);
 
     for (int y = 0; y < height; y++) {
@@ -435,7 +436,7 @@ static void binarizeCE_uint16(const float * blur, uint8_t * _dstp, const int wid
 }
 
 static void binarizeCE_float(const float * blur, uint8_t * _dstp, const int width, const int height, const int stride, const int blurStride,
-                             const int peak, const float lower, const float upper) {
+                             const int peak, const float lower, const float upper) noexcept {
     float * dstp = reinterpret_cast<float *>(_dstp);
 
     for (int y = 0; y < height; y++) {
@@ -450,7 +451,7 @@ static void binarizeCE_float(const float * blur, uint8_t * _dstp, const int widt
 }
 
 static void discretizeGM_uint8(const float * gradient, uint8_t * dstp, const int width, const int height, const int stride,
-                               const float magnitude, const int peak, const float offset, const float upper) {
+                               const float magnitude, const int peak, const float offset, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 32) {
             const Vec8f srcp_8f_0 = Vec8f().load_a(gradient + x);
@@ -473,7 +474,7 @@ static void discretizeGM_uint8(const float * gradient, uint8_t * dstp, const int
 }
 
 static void discretizeGM_uint16(const float * gradient, uint8_t * _dstp, const int width, const int height, const int stride,
-                                const float magnitude, const int peak, const float offset, const float upper) {
+                                const float magnitude, const int peak, const float offset, const float upper) noexcept {
     uint16_t * dstp = reinterpret_cast<uint16_t *>(_dstp);
 
     for (int y = 0; y < height; y++) {
@@ -492,7 +493,7 @@ static void discretizeGM_uint16(const float * gradient, uint8_t * _dstp, const i
 }
 
 static void discretizeGM_float(const float * gradient, uint8_t * _dstp, const int width, const int height, const int stride,
-                               const float magnitude, const int peak, const float offset, const float upper) {
+                               const float magnitude, const int peak, const float offset, const float upper) noexcept {
     float * dstp = reinterpret_cast<float *>(_dstp);
 
     for (int y = 0; y < height; y++) {
@@ -506,7 +507,7 @@ static void discretizeGM_float(const float * gradient, uint8_t * _dstp, const in
     }
 }
 #else
-static void gaussianBlurHorizontal(float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int radius) {
+static void gaussianBlurHorizontal(float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
         buffer[-i] = buffer[i - 1];
         buffer[width - 1 + i] = buffer[width - i];
@@ -524,7 +525,7 @@ static void gaussianBlurHorizontal(float * VS_RESTRICT buffer, float * VS_RESTRI
 
 template<typename T>
 static void gaussianBlurVertical(const T * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int height,
-                                 const int stride, const int blurStride, const int radius, const float offset) {
+                                 const int stride, const int blurStride, const int radius, const float offset) noexcept {
     const int diameter = radius * 2 + 1;
     const T ** srcp = new const T *[diameter];
 
@@ -560,7 +561,7 @@ static void gaussianBlurVertical(const T * _srcp, float * VS_RESTRICT buffer, fl
 
 template<>
 void gaussianBlurVertical<float>(const float * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int height,
-                                 const int stride, const int blurStride, const int radius, const float offset) {
+                                 const int stride, const int blurStride, const int radius, const float offset) noexcept {
     const int diameter = radius * 2 + 1;
     const float ** srcp = new const float *[diameter];
 
@@ -595,7 +596,7 @@ void gaussianBlurVertical<float>(const float * _srcp, float * VS_RESTRICT buffer
 }
 
 static void detectEdge(float * blur, float * VS_RESTRICT gradient, float * VS_RESTRICT direction, const int width, const int height,
-                       const int stride, const int blurStride, const int mode, const int op) {
+                       const int stride, const int blurStride, const int mode, const int op) noexcept {
     float * VS_RESTRICT srcpp = blur;
     float * VS_RESTRICT srcp = blur;
     float * VS_RESTRICT srcpn = blur + blurStride;
@@ -643,7 +644,8 @@ static void detectEdge(float * blur, float * VS_RESTRICT gradient, float * VS_RE
     }
 }
 
-static void nonMaximumSuppression(const float * gradient, const float * direction, float * VS_RESTRICT blur, const int width, const int height, const int stride, const int blurStride) {
+static void nonMaximumSuppression(const float * gradient, const float * direction, float * VS_RESTRICT blur, const int width, const int height,
+                                  const int stride, const int blurStride) noexcept {
     const int offsets[] { 1, -stride + 1, -stride, -stride - 1 };
 
     std::fill_n(blur, width, -FLT_MAX);
@@ -666,7 +668,7 @@ static void nonMaximumSuppression(const float * gradient, const float * directio
 
 template<typename T>
 static void outputGB(const float * blur, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                     const int peak, const float offset, const float upper) {
+                     const int peak, const float offset, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(static_cast<int>(blur[x] + 0.5f), peak);
@@ -678,7 +680,7 @@ static void outputGB(const float * blur, T * VS_RESTRICT dstp, const int width, 
 
 template<>
 void outputGB<float>(const float * blur, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                     const int peak, const float offset, const float upper) {
+                     const int peak, const float offset, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(blur[x] - offset, upper);
@@ -690,7 +692,7 @@ void outputGB<float>(const float * blur, float * VS_RESTRICT dstp, const int wid
 
 template<typename T>
 static void binarizeCE(const float * blur, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                       const T peak, const float lower, const float upper) {
+                       const T peak, const float lower, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (blur[x] == FLT_MAX) ? peak : 0;
@@ -702,7 +704,7 @@ static void binarizeCE(const float * blur, T * VS_RESTRICT dstp, const int width
 
 template<>
 void binarizeCE<float>(const float * blur, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                       const float peak, const float lower, const float upper) {
+                       const float peak, const float lower, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (blur[x] == FLT_MAX) ? upper : lower;
@@ -714,7 +716,7 @@ void binarizeCE<float>(const float * blur, float * VS_RESTRICT dstp, const int w
 
 template<typename T>
 static void discretizeGM(const float * gradient, T * VS_RESTRICT dstp, const int width, const int height, const int stride,
-                         const float magnitude, const int peak, const float offset, const float upper) {
+                         const float magnitude, const int peak, const float offset, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(static_cast<int>(gradient[x] * magnitude + 0.5f), peak);
@@ -726,7 +728,7 @@ static void discretizeGM(const float * gradient, T * VS_RESTRICT dstp, const int
 
 template<>
 void discretizeGM<float>(const float * gradient, float * VS_RESTRICT dstp, const int width, const int height, const int stride,
-                         const float magnitude, const int peak, const float offset, const float upper) {
+                         const float magnitude, const int peak, const float offset, const float upper) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = std::min(gradient[x] * magnitude - offset, upper);
@@ -737,7 +739,7 @@ void discretizeGM<float>(const float * gradient, float * VS_RESTRICT dstp, const
 }
 #endif
 
-static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const int width, const int height, const int blurStride, const float t_h, const float t_l) {
+static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const int width, const int height, const int blurStride, const float t_h, const float t_l) noexcept {
     memset(stack.map, 0, width * height);
     stack.index = -1;
 
@@ -769,7 +771,7 @@ static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, cons
 
 template<typename T>
 static void discretizeDM_T(const float * blur, const float * direction, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                           const int bins, const float offset, const float lower) {
+                           const int bins, const float offset, const float lower) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (blur[x] == FLT_MAX) ? getBin<T>(direction[x], bins) : 0;
@@ -782,7 +784,7 @@ static void discretizeDM_T(const float * blur, const float * direction, T * VS_R
 
 template<>
 void discretizeDM_T<float>(const float * blur, const float * direction, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int blurStride,
-                           const int bins, const float offset, const float lower) {
+                           const int bins, const float offset, const float lower) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = (blur[x] == FLT_MAX) ? getBin<float>(direction[x], bins) - offset : lower;
@@ -794,7 +796,7 @@ void discretizeDM_T<float>(const float * blur, const float * direction, float * 
 }
 
 template<typename T>
-static void discretizeDM(const float * direction, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) {
+static void discretizeDM(const float * direction, T * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = getBin<T>(direction[x], bins);
@@ -805,7 +807,7 @@ static void discretizeDM(const float * direction, T * VS_RESTRICT dstp, const in
 }
 
 template<>
-void discretizeDM<float>(const float * direction, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) {
+void discretizeDM<float>(const float * direction, float * VS_RESTRICT dstp, const int width, const int height, const int stride, const int bins, const float offset) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++)
             dstp[x] = getBin<float>(direction[x], bins) - offset;
@@ -817,7 +819,7 @@ void discretizeDM<float>(const float * direction, float * VS_RESTRICT dstp, cons
 
 template<typename T>
 static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, float * blur, float * gradient, float * direction,
-                    Stack & stack, const TCannyData * d, const VSAPI * vsapi) {
+                    Stack & stack, const TCannyData * d, const VSAPI * vsapi) noexcept {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const int width = vsapi->getFrameWidth(src, plane);
