@@ -471,8 +471,8 @@ public:
         return xmm;
     }
     // Member function to load from array (unaligned)
-    Vec4f & load(float const * p) {
-        xmm = _mm_loadu_ps(p);
+    Vec4f & load(void const * p) {
+        xmm = _mm_loadu_ps((float const *)p);
         return *this;
     }
     // Member function to load from array, aligned by 16
@@ -480,25 +480,25 @@ public:
     // Merom, Wolfdale) and Atom, but not on other processors from Intel, AMD or VIA.
     // You may use load_a instead of load if you are certain that p points to an address
     // divisible by 16.
-    Vec4f & load_a(float const * p) {
-        xmm = _mm_load_ps(p);
+    Vec4f & load_a(void const * p) {
+        xmm = _mm_load_ps((float const *)p);
         return *this;
     }
     // Member function to store into array (unaligned)
-    void store(float * p) const {
-        _mm_storeu_ps(p, xmm);
+    void store(void * p) const {
+        _mm_storeu_ps((float *)p, xmm);
     }
     // Member function to store into array, aligned by 16
     // "store_a" is faster than "store" on older Intel processors (Pentium 4, Pentium M, Core 1,
     // Merom, Wolfdale) and Atom, but not on other processors from Intel, AMD or VIA.
     // You may use store_a instead of store if you are certain that p points to an address
     // divisible by 16.
-    void store_a(float * p) const {
-        _mm_store_ps(p, xmm);
+    void store_a(void * p) const {
+        _mm_store_ps((float *)p, xmm);
     }
     // Member function to store into array using a non-temporal memory hint, aligned by 16
-    void stream(float * p) const {
-        _mm_stream_ps(p, xmm);
+    void stream(void * p) const {
+        _mm_stream_ps((float *)p, xmm);
     }
     // Partial load. Load n elements and set the rest to 0
     Vec4f & load_partial(int n, float const * p) {

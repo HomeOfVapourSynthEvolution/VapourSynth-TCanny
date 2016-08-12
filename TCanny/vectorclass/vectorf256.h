@@ -573,30 +573,30 @@ public:
         return ymm;
     }
     // Member function to load from array (unaligned)
-    Vec8f & load(float const * p) {
-        ymm = _mm256_loadu_ps(p);
+    Vec8f & load(void const * p) {
+        ymm = _mm256_loadu_ps((float const *)p);
         return *this;
     }
     // Member function to load from array, aligned by 32
     // You may use load_a instead of load if you are certain that p points to an address
     // divisible by 32.
-    Vec8f & load_a(float const * p) {
-        ymm = _mm256_load_ps(p);
+    Vec8f & load_a(void const * p) {
+        ymm = _mm256_load_ps((float const *)p);
         return *this;
     }
     // Member function to store into array (unaligned)
-    void store(float * p) const {
-        _mm256_storeu_ps(p, ymm);
+    void store(void * p) const {
+        _mm256_storeu_ps((float *)p, ymm);
     }
     // Member function to store into array, aligned by 32
     // You may use store_a instead of store if you are certain that p points to an address
     // divisible by 32.
-    void store_a(float * p) const {
-        _mm256_store_ps(p, ymm);
+    void store_a(void * p) const {
+        _mm256_store_ps((float *)p, ymm);
     }
     // Member function to store into array using a non-temporal memory hint, aligned by 32
-    void stream(float * p) const {
-        _mm256_stream_ps(p, ymm);
+    void stream(void * p) const {
+        _mm256_stream_ps((float *)p, ymm);
     }
     // Partial load. Load n elements and set the rest to 0
     Vec8f & load_partial(int n, float const * p) {
