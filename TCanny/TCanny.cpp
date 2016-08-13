@@ -21,8 +21,8 @@
 */
 
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 #include <utility>
 #include <vapoursynth/VapourSynth.h>
@@ -234,7 +234,7 @@ static void detectEdge(float * blur, float * gradient, float * direction, const 
 static void nonMaximumSuppression(const float * _gradient, const float * _direction, float * blur, const unsigned width, const unsigned height,
                                   const unsigned stride, const unsigned blurStride) noexcept {
     for (unsigned x = 0; x < width; x += 8)
-        Vec8f(-FLT_MAX).stream(blur + x);
+        Vec8f(std::numeric_limits<float>::lowest()).stream(blur + x);
 
     for (unsigned y = 1; y < height - 1; y++) {
         _gradient += stride;
@@ -262,16 +262,16 @@ static void nonMaximumSuppression(const float * _gradient, const float * _direct
             result |= gradient & mask;
 
             gradient = Vec8f().load(_gradient + x);
-            select(gradient >= result, gradient, -FLT_MAX).store(blur + x);
+            select(gradient >= result, gradient, std::numeric_limits<float>::lowest()).store(blur + x);
         }
 
-        blur[0] = blur[width - 1] = -FLT_MAX;
+        blur[0] = blur[width - 1] = std::numeric_limits<float>::lowest();
     }
 
     blur += blurStride;
 
     for (unsigned x = 0; x < width; x += 8)
-        Vec8f(-FLT_MAX).stream(blur + x);
+        Vec8f(std::numeric_limits<float>::lowest()).stream(blur + x);
 }
 
 template<typename T>
@@ -314,10 +314,10 @@ static void binarizeCE(const float * blur, T * dstp, const unsigned width, const
     for (unsigned y = 0; y < height; y++) {
         if (std::is_same<T, uint8_t>::value) {
             for (unsigned x = 0; x < width; x += 32) {
-                const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == FLT_MAX);
-                const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == FLT_MAX);
-                const Vec8ib mask_8ib_2 = Vec8ib(Vec8f().load_a(blur + x + 16) == FLT_MAX);
-                const Vec8ib mask_8ib_3 = Vec8ib(Vec8f().load_a(blur + x + 24) == FLT_MAX);
+                const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == std::numeric_limits<float>::max());
+                const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == std::numeric_limits<float>::max());
+                const Vec8ib mask_8ib_2 = Vec8ib(Vec8f().load_a(blur + x + 16) == std::numeric_limits<float>::max());
+                const Vec8ib mask_8ib_3 = Vec8ib(Vec8f().load_a(blur + x + 24) == std::numeric_limits<float>::max());
                 const Vec16sb mask_16sb_0 = Vec16sb(compress_saturated(mask_8ib_0, mask_8ib_1));
                 const Vec16sb mask_16sb_1 = Vec16sb(compress_saturated(mask_8ib_2, mask_8ib_3));
                 const Vec32cb mask = Vec32cb(compress_saturated(mask_16sb_0, mask_16sb_1));
@@ -325,14 +325,14 @@ static void binarizeCE(const float * blur, T * dstp, const unsigned width, const
             }
         } else if (std::is_same<T, uint16_t>::value) {
             for (unsigned x = 0; x < width; x += 16) {
-                const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == FLT_MAX);
-                const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == FLT_MAX);
+                const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == std::numeric_limits<float>::max());
+                const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == std::numeric_limits<float>::max());
                 const Vec16sb mask = Vec16sb(compress_saturated(mask_8ib_0, mask_8ib_1));
                 select(mask, Vec16us(peak), Vec16us(0)).stream(dstp + x);
             }
         } else {
             for (unsigned x = 0; x < width; x += 8) {
-                const Vec8fb mask = Vec8f().load_a(blur + x) == FLT_MAX;
+                const Vec8fb mask = Vec8f().load_a(blur + x) == std::numeric_limits<float>::max();
                 select(mask, Vec8f(upper), Vec8f(lower)).stream(dstp + x);
             }
         }
@@ -491,7 +491,7 @@ static void nonMaximumSuppression(const float * gradient, const float * directio
                                   const int stride, const unsigned blurStride) noexcept {
     const int offsets[] { 1, -stride + 1, -stride, -stride - 1 };
 
-    std::fill_n(blur, width, -FLT_MAX);
+    std::fill_n(blur, width, std::numeric_limits<float>::lowest());
 
     for (unsigned y = 1; y < height - 1; y++) {
         gradient += stride;
@@ -500,13 +500,13 @@ static void nonMaximumSuppression(const float * gradient, const float * directio
 
         for (int x = 1; x < width - 1; x++) {
             const int offset = offsets[getBin<int>(direction[x], 4)];
-            blur[x] = (gradient[x] >= std::max(gradient[x + offset], gradient[x - offset])) ? gradient[x] : -FLT_MAX;
+            blur[x] = (gradient[x] >= std::max(gradient[x + offset], gradient[x - offset])) ? gradient[x] : std::numeric_limits<float>::lowest();
         }
 
-        blur[0] = blur[width - 1] = -FLT_MAX;
+        blur[0] = blur[width - 1] = std::numeric_limits<float>::lowest();
     }
 
-    std::fill_n(blur + blurStride, width, -FLT_MAX);
+    std::fill_n(blur + blurStride, width, std::numeric_limits<float>::lowest());
 }
 
 template<typename T>
@@ -531,9 +531,9 @@ static void binarizeCE(const float * blur, T * VS_RESTRICT dstp, const unsigned 
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
             if (!std::is_same<T, float>::value)
-                dstp[x] = (blur[x] == FLT_MAX) ? peak : 0;
+                dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? peak : 0;
             else
-                dstp[x] = (blur[x] == FLT_MAX) ? upper : lower;
+                dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? upper : lower;
         }
 
         blur += blurStride;
@@ -568,8 +568,8 @@ static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, cons
             if (blur[blurStride * y + x] < t_h || stack.map[width * y + x])
                 continue;
 
-            blur[blurStride * y + x] = FLT_MAX;
-            stack.map[width * y + x] = UINT8_MAX;
+            blur[blurStride * y + x] = std::numeric_limits<float>::max();
+            stack.map[width * y + x] = std::numeric_limits<uint8_t>::max();
             push(stack, x, y);
 
             while (stack.index > -1) {
@@ -578,8 +578,8 @@ static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, cons
                 for (unsigned yy = pos.second - 1; yy <= pos.second + 1; yy++) {
                     for (unsigned xx = pos.first - 1; xx <= pos.first + 1; xx++) {
                         if (blur[blurStride * yy + xx] >= t_l && !stack.map[width * yy + xx]) {
-                            blur[blurStride * yy + xx] = FLT_MAX;
-                            stack.map[width * yy + xx] = UINT8_MAX;
+                            blur[blurStride * yy + xx] = std::numeric_limits<float>::max();
+                            stack.map[width * yy + xx] = std::numeric_limits<uint8_t>::max();
                             push(stack, xx, yy);
                         }
                     }
@@ -595,9 +595,9 @@ static void discretizeDM_T(const float * blur, const float * direction, T * VS_R
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
             if (!std::is_same<T, float>::value)
-                dstp[x] = (blur[x] == FLT_MAX) ? getBin<T>(direction[x], bins) : 0;
+                dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? getBin<T>(direction[x], bins) : 0;
             else
-                dstp[x] = (blur[x] == FLT_MAX) ? getBin<float>(direction[x], bins) - offset : lower;
+                dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? getBin<float>(direction[x], bins) - offset : lower;
         }
 
         blur += blurStride;
