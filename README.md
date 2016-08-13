@@ -11,6 +11,8 @@ Usage
 
     tcanny.TCanny(clip clip[, float sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int[] planes])
 
+* clip: Clip to process. Any planar format with either integer sample type of 8-16 bit depth or float sample type of 32 bit depth is supported.
+
 * sigma: Standard deviation of gaussian blur.
 
 * t_h: High gradient magnitude threshold for hysteresis.
