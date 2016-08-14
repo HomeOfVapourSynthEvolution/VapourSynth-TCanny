@@ -23,7 +23,9 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vapoursynth/VapourSynth.h>
 #include <vapoursynth/VSHelper.h>
@@ -45,6 +47,7 @@ struct TCannyData {
     float magnitude;
     unsigned radiusAlign, bins, peak;
     float offset[3], lower[3], upper[3];
+    std::unordered_map<std::thread::id, float *> buffer, blur, gradient, direction;
 };
 
 struct Stack {
@@ -664,7 +667,7 @@ static void VS_CC tcannyInit(VSMap *in, VSMap *out, void **instanceData, VSNode 
 }
 
 static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-    const TCannyData * d = static_cast<const TCannyData *>(*instanceData);
+    TCannyData * d = static_cast<TCannyData *>(*instanceData);
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
@@ -678,39 +681,56 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
         const int pl[] { 0, 1, 2 };
         VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
 
-        float * buffer = vs_aligned_malloc<float>((d->vi->width + d->radiusAlign * 2) * sizeof(float), 32);
-        if (!buffer) {
-            vsapi->setFilterError("TCanny: malloc failure (buffer)", frameCtx);
-            vsapi->freeFrame(src);
-            vsapi->freeFrame(dst);
-            return nullptr;
-        }
+        std::thread::id threadId = std::this_thread::get_id();
 
-        float * blur = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + 16) * d->vi->height * sizeof(float), 32);
-        if (!blur) {
-            vsapi->setFilterError("TCanny: malloc failure (blur)", frameCtx);
-            vsapi->freeFrame(src);
-            vsapi->freeFrame(dst);
-            return nullptr;
-        }
-
-        float * gradient = nullptr, * direction = nullptr;
-        if (d->mode != -1) {
-            gradient = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
-            if (!gradient) {
-                vsapi->setFilterError("TCanny: malloc failure (gradient)", frameCtx);
+        if (!d->buffer.count(threadId)) {
+            float * buffer = vs_aligned_malloc<float>((d->vi->width + d->radiusAlign * 2) * sizeof(float), 32);
+            if (!buffer) {
+                vsapi->setFilterError("TCanny: malloc failure (buffer)", frameCtx);
                 vsapi->freeFrame(src);
                 vsapi->freeFrame(dst);
                 return nullptr;
             }
+            d->buffer.emplace(threadId, buffer);
+        }
 
-            if (d->mode != 1) {
-                direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
-                if (!direction) {
-                    vsapi->setFilterError("TCanny: malloc failure (direction)", frameCtx);
+        if (!d->blur.count(threadId)) {
+            float * blur = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + 16) * d->vi->height * sizeof(float), 32);
+            if (!blur) {
+                vsapi->setFilterError("TCanny: malloc failure (blur)", frameCtx);
+                vsapi->freeFrame(src);
+                vsapi->freeFrame(dst);
+                return nullptr;
+            }
+            d->blur.emplace(threadId, blur);
+        }
+
+        if (!d->gradient.count(threadId)) {
+            if (d->mode != -1) {
+                float * gradient = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
+                if (!gradient) {
+                    vsapi->setFilterError("TCanny: malloc failure (gradient)", frameCtx);
                     vsapi->freeFrame(src);
                     vsapi->freeFrame(dst);
                     return nullptr;
+                }
+                d->gradient.emplace(threadId, gradient);
+            } else {
+                d->gradient.emplace(threadId, nullptr);
+            }
+
+            if (!d->direction.count(threadId)) {
+                if (d->mode != 1) {
+                    float * direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
+                    if (!direction) {
+                        vsapi->setFilterError("TCanny: malloc failure (direction)", frameCtx);
+                        vsapi->freeFrame(src);
+                        vsapi->freeFrame(dst);
+                        return nullptr;
+                    }
+                    d->direction.emplace(threadId, direction);
+                } else {
+                    d->direction.emplace(threadId, nullptr);
                 }
             }
         }
@@ -729,18 +749,14 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
         if (d->vi->format->sampleType == stInteger) {
             if (d->vi->format->bitsPerSample == 8)
-                process<uint8_t>(src, dst, buffer + d->radiusAlign, blur + 8, gradient, direction, stack, d, vsapi);
+                process<uint8_t>(src, dst, d->buffer.at(threadId) + d->radiusAlign, d->blur.at(threadId) + 8, d->gradient.at(threadId), d->direction.at(threadId), stack, d, vsapi);
             else
-                process<uint16_t>(src, dst, buffer + d->radiusAlign, blur + 8, gradient, direction, stack, d, vsapi);
+                process<uint16_t>(src, dst, d->buffer.at(threadId) + d->radiusAlign, d->blur.at(threadId) + 8, d->gradient.at(threadId), d->direction.at(threadId), stack, d, vsapi);
         } else {
-            process<float>(src, dst, buffer + d->radiusAlign, blur + 8, gradient, direction, stack, d, vsapi);
+            process<float>(src, dst, d->buffer.at(threadId) + d->radiusAlign, d->blur.at(threadId) + 8, d->gradient.at(threadId), d->direction.at(threadId), stack, d, vsapi);
         }
 
         vsapi->freeFrame(src);
-        vs_aligned_free(buffer);
-        vs_aligned_free(blur);
-        vs_aligned_free(gradient);
-        vs_aligned_free(direction);
         vs_aligned_free(stack.map);
         vs_aligned_free(stack.pos);
         return dst;
@@ -755,6 +771,19 @@ static void VS_CC tcannyFree(void *instanceData, VSCore *core, const VSAPI *vsap
     vsapi->freeNode(d->node);
 
     delete[] d->weights;
+
+    for (auto & element : d->buffer)
+        vs_aligned_free(element.second);
+
+    for (auto & element : d->blur)
+        vs_aligned_free(element.second);
+
+    for (auto & element : d->gradient)
+        vs_aligned_free(element.second);
+
+    for (auto & element : d->direction)
+        vs_aligned_free(element.second);
+
     delete d;
 }
 
@@ -883,6 +912,12 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     d.radiusAlign = (d.radius + 7) & -8;
 
     d.magnitude = 255.f / d.gmmax;
+
+    const int numThreads = vsapi->getCoreInfo(core)->numThreads;
+    d.buffer.reserve(numThreads);
+    d.blur.reserve(numThreads);
+    d.gradient.reserve(numThreads);
+    d.direction.reserve(numThreads);
 
     TCannyData * data = new TCannyData { std::move(d) };
 
