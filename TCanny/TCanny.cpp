@@ -27,6 +27,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 #include <vapoursynth/VapourSynth.h>
 #include <vapoursynth/VSHelper.h>
 #ifdef VS_TARGET_CPU_X86
@@ -48,21 +49,8 @@ struct TCannyData {
     unsigned radiusAlign, bins, peak;
     float offset[3], lower[3], upper[3];
     std::unordered_map<std::thread::id, float *> buffer, blur, gradient, direction;
+    std::unordered_map<std::thread::id, uint8_t *> label;
 };
-
-struct Stack {
-    uint8_t * map;
-    std::pair<unsigned, unsigned> * pos;
-    int index;
-};
-
-static inline void push(Stack & s, const unsigned x, const unsigned y) noexcept {
-    s.pos[++s.index] = std::make_pair(x, y);
-}
-
-static inline std::pair<unsigned, unsigned> pop(Stack & s) noexcept {
-    return s.pos[s.index--];
-}
 
 static float * gaussianWeights(const float sigma, int * radius) noexcept {
     const unsigned diameter = std::max(static_cast<int>(sigma * 3.f + 0.5f), 1) * 2 + 1;
@@ -561,29 +549,32 @@ static void discretizeGM(const float * gradient, T * VS_RESTRICT dstp, const uns
 }
 #endif
 
-static void hysteresis(float * VS_RESTRICT blur, Stack & VS_RESTRICT stack, const unsigned width, const unsigned height, const unsigned blurStride,
+static void hysteresis(float * VS_RESTRICT blur, uint8_t * VS_RESTRICT label, const unsigned width, const unsigned height, const unsigned blurStride,
                        const float t_h, const float t_l) noexcept {
-    memset(stack.map, 0, width * height);
-    stack.index = -1;
+    memset(label, 0, width * height);
+
+    std::vector<std::pair<unsigned, unsigned>> coordinates;
 
     for (unsigned y = 1; y < height - 1; y++) {
         for (unsigned x = 1; x < width - 1; x++) {
-            if (blur[blurStride * y + x] < t_h || stack.map[width * y + x])
-                continue;
+            if (!label[width * y + x] && blur[blurStride * y + x] >= t_h) {
+                label[width * y + x] = std::numeric_limits<uint8_t>::max();
+                blur[blurStride * y + x] = std::numeric_limits<float>::max();
 
-            blur[blurStride * y + x] = std::numeric_limits<float>::max();
-            stack.map[width * y + x] = std::numeric_limits<uint8_t>::max();
-            push(stack, x, y);
+                coordinates.emplace_back(std::make_pair(x, y));
 
-            while (stack.index > -1) {
-                const std::pair<unsigned, unsigned> pos = pop(stack);
+                while (!coordinates.empty()) {
+                    const auto pos = coordinates.back();
+                    coordinates.pop_back();
 
-                for (unsigned yy = pos.second - 1; yy <= pos.second + 1; yy++) {
-                    for (unsigned xx = pos.first - 1; xx <= pos.first + 1; xx++) {
-                        if (blur[blurStride * yy + xx] >= t_l && !stack.map[width * yy + xx]) {
-                            blur[blurStride * yy + xx] = std::numeric_limits<float>::max();
-                            stack.map[width * yy + xx] = std::numeric_limits<uint8_t>::max();
-                            push(stack, xx, yy);
+                    for (unsigned yy = pos.second - 1; yy <= pos.second + 1; yy++) {
+                        for (unsigned xx = pos.first - 1; xx <= pos.first + 1; xx++) {
+                            if (!label[width * yy + xx] && blur[blurStride * yy + xx] >= t_l) {
+                                label[width * yy + xx] = std::numeric_limits<uint8_t>::max();
+                                blur[blurStride * yy + xx] = std::numeric_limits<float>::max();
+
+                                coordinates.emplace_back(std::make_pair(xx, yy));
+                            }
                         }
                     }
                 }
@@ -626,8 +617,7 @@ static void discretizeDM(const float * direction, T * VS_RESTRICT dstp, const un
 }
 
 template<typename T>
-static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, float * blur, float * gradient, float * direction,
-                    Stack & stack, const TCannyData * d, const VSAPI * vsapi) noexcept {
+static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData * d, const VSAPI * vsapi) noexcept {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const unsigned width = vsapi->getFrameWidth(src, plane);
@@ -637,6 +627,13 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, fl
             const T * srcp = reinterpret_cast<const T *>(vsapi->getReadPtr(src, plane));
             T * dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
+            const auto threadId = std::this_thread::get_id();
+            float * buffer = d->buffer.at(threadId) + d->radiusAlign;
+            float * blur = d->blur.at(threadId) + 8;
+            float * gradient = d->gradient.at(threadId);
+            float * direction = d->direction.at(threadId);
+            uint8_t * label = d->label.at(threadId);
+
             gaussianBlurVertical(srcp, buffer, blur, d->weights, width, height, stride, blurStride, d->radius, d->offset[plane]);
 
             if (d->mode != -1)
@@ -644,7 +641,7 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, float * buffer, fl
 
             if (!(d->mode & 1)) {
                 nonMaximumSuppression(gradient, direction, blur, width, height, stride, blurStride);
-                hysteresis(blur, stack, width, height, blurStride, d->t_h, d->t_l);
+                hysteresis(blur, label, width, height, blurStride, d->t_h, d->t_l);
             }
 
             if (d->mode == -1)
@@ -681,7 +678,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
         const int pl[] { 0, 1, 2 };
         VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
 
-        std::thread::id threadId = std::this_thread::get_id();
+        auto threadId = std::this_thread::get_id();
 
         if (!d->buffer.count(threadId)) {
             float * buffer = vs_aligned_malloc<float>((d->vi->width + d->radiusAlign * 2) * sizeof(float), 32);
@@ -735,30 +732,29 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
             }
         }
 
-        Stack stack {};
-        if (!(d->mode & 1)) {
-            stack.map = vs_aligned_malloc<uint8_t>(d->vi->width * d->vi->height, 32);
-            stack.pos = vs_aligned_malloc<std::pair<unsigned, unsigned>>(d->vi->width * d->vi->height * sizeof(std::pair<unsigned, unsigned>), 32);
-            if (!stack.map || !stack.pos) {
-                vsapi->setFilterError("TCanny: malloc failure (stack)", frameCtx);
-                vsapi->freeFrame(src);
-                vsapi->freeFrame(dst);
-                return nullptr;
+        if (!d->label.count(threadId)) {
+            if (!(d->mode & 1)) {
+                uint8_t * label = new (std::nothrow) uint8_t[d->vi->width * d->vi->height];
+                if (!label) {
+                    vsapi->setFilterError("TCanny: malloc failure (label)", frameCtx);
+                    vsapi->freeFrame(src);
+                    vsapi->freeFrame(dst);
+                    return nullptr;
+                }
+                d->label.emplace(threadId, label);
+            } else {
+                d->label.emplace(threadId, nullptr);
             }
         }
 
-        if (d->vi->format->sampleType == stInteger) {
-            if (d->vi->format->bitsPerSample == 8)
-                process<uint8_t>(src, dst, d->buffer.at(threadId) + d->radiusAlign, d->blur.at(threadId) + 8, d->gradient.at(threadId), d->direction.at(threadId), stack, d, vsapi);
-            else
-                process<uint16_t>(src, dst, d->buffer.at(threadId) + d->radiusAlign, d->blur.at(threadId) + 8, d->gradient.at(threadId), d->direction.at(threadId), stack, d, vsapi);
-        } else {
-            process<float>(src, dst, d->buffer.at(threadId) + d->radiusAlign, d->blur.at(threadId) + 8, d->gradient.at(threadId), d->direction.at(threadId), stack, d, vsapi);
-        }
+        if (d->vi->format->bytesPerSample == 1)
+            process<uint8_t>(src, dst, d, vsapi);
+        else if (d->vi->format->bytesPerSample == 2)
+            process<uint16_t>(src, dst, d, vsapi);
+        else
+            process<float>(src, dst, d, vsapi);
 
         vsapi->freeFrame(src);
-        vs_aligned_free(stack.map);
-        vs_aligned_free(stack.pos);
         return dst;
     }
 
@@ -783,6 +779,9 @@ static void VS_CC tcannyFree(void *instanceData, VSCore *core, const VSAPI *vsap
 
     for (auto & element : d->direction)
         vs_aligned_free(element.second);
+
+    for (auto & element : d->label)
+        delete[] element.second;
 
     delete d;
 }
@@ -889,16 +888,14 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         d.bins = 1;
 
         for (int plane = 0; plane < d.vi->format->numPlanes; plane++) {
-            if (d.process[plane]) {
-                if (plane == 0 || d.vi->format->colorFamily == cmRGB) {
-                    d.offset[plane] = 0.f;
-                    d.lower[plane] = 0.f;
-                    d.upper[plane] = 1.f;
-                } else {
-                    d.offset[plane] = 0.5f;
-                    d.lower[plane] = -0.5f;
-                    d.upper[plane] = 0.5f;
-                }
+            if (plane == 0 || d.vi->format->colorFamily == cmRGB) {
+                d.offset[plane] = 0.f;
+                d.lower[plane] = 0.f;
+                d.upper[plane] = 1.f;
+            } else {
+                d.offset[plane] = 0.5f;
+                d.lower[plane] = -0.5f;
+                d.upper[plane] = 0.5f;
             }
         }
     }
@@ -918,6 +915,7 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     d.blur.reserve(numThreads);
     d.gradient.reserve(numThreads);
     d.direction.reserve(numThreads);
+    d.label.reserve(numThreads);
 
     TCannyData * data = new TCannyData { std::move(d) };
 
