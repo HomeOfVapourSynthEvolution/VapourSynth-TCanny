@@ -9,7 +9,7 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
 Usage
 =====
 
-    tcanny.TCanny(clip clip[, float sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int[] planes])
+    tcanny.TCanny(clip clip[, float sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int opt=0, int[] planes])
 
 * clip: Clip to process. Any planar format with either integer sample type of 8-16 bit depth or float sample type of 32 bit depth is supported.
 
@@ -33,5 +33,12 @@ Usage
   * 3 = the Scharr operator
 
 * gmmax: Used for scaling gradient magnitude into [0, 2^bitdepth-1] for mode=1.
+
+* opt: Sets which cpu optimizations to use.
+  * 0 = auto detect
+  * 1 = use c
+  * 2 = use sse2
+  * 3 = use avx
+  * 4 = use avx2
 
 * planes: A list of the planes to process. By default all planes are processed.
