@@ -42,3 +42,13 @@ Usage
   * 4 = use avx2
 
 * planes: A list of the planes to process. By default all planes are processed.
+
+
+Compilation
+===========
+
+```
+./autogen.sh
+./configure
+make
+```
