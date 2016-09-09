@@ -24,18 +24,19 @@ void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, const float * wei
     }
 }
 
-template<typename T> void gaussianBlurVertical_SSE2(const T *, float *, float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const float) noexcept;
+template<typename T> void gaussianBlurVertical_SSE2(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) noexcept;
 
 template<>
-void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * blur, const float * weights, const unsigned width, const int height,
-                               const unsigned stride, const unsigned blurStride, const int radius, const float offset) noexcept {
-    const unsigned diameter = radius * 2 + 1;
+void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
+                               const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
+                               const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
+    const unsigned diameter = radiusVertical * 2 + 1;
     const uint8_t ** _srcp = new const uint8_t *[diameter];
 
-    _srcp[radius] = __srcp;
-    for (int i = 1; i <= radius; i++) {
-        _srcp[radius - i] = _srcp[radius + i - 1];
-        _srcp[radius + i] = _srcp[radius] + stride * i;
+    _srcp[radiusVertical] = __srcp;
+    for (int i = 1; i <= radiusVertical; i++) {
+        _srcp[radiusVertical - i] = _srcp[radiusVertical + i - 1];
+        _srcp[radiusVertical + i] = _srcp[radiusVertical] + stride * i;
     }
 
     for (int y = 0; y < height; y++) {
@@ -47,19 +48,19 @@ void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * b
                 const Vec8us srcp_8us = extend_low(srcp_16uc);
                 const Vec4i srcp_4i = Vec4i(extend_low(srcp_8us));
                 const Vec4f srcp = to_float(srcp_4i);
-                sum = mul_add(srcp, weights[i], sum);
+                sum = mul_add(srcp, weightsVertical[i], sum);
             }
 
             sum.store_a(buffer + x);
         }
 
-        gaussianBlurHorizontal_SSE2(buffer, blur, weights + radius, width, radius);
+        gaussianBlurHorizontal_SSE2(buffer, blur, weightsHorizontal + radiusHorizontal, width, radiusHorizontal);
 
         for (unsigned i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-        if (y < height - 1 - radius)
+        if (y < height - 1 - radiusVertical)
             _srcp[diameter - 1] += stride;
-        else if (y > height - 1 - radius)
+        else if (y > height - 1 - radiusVertical)
             _srcp[diameter - 1] -= stride;
         blur += blurStride;
     }
@@ -68,15 +69,16 @@ void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * b
 }
 
 template<>
-void gaussianBlurVertical_SSE2(const uint16_t * __srcp, float * buffer, float * blur, const float * weights, const unsigned width, const int height,
-                               const unsigned stride, const unsigned blurStride, const int radius, const float offset) noexcept {
-    const unsigned diameter = radius * 2 + 1;
+void gaussianBlurVertical_SSE2(const uint16_t * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
+                               const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
+                               const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
+    const unsigned diameter = radiusVertical * 2 + 1;
     const uint16_t ** _srcp = new const uint16_t *[diameter];
 
-    _srcp[radius] = __srcp;
-    for (int i = 1; i <= radius; i++) {
-        _srcp[radius - i] = _srcp[radius + i - 1];
-        _srcp[radius + i] = _srcp[radius] + stride * i;
+    _srcp[radiusVertical] = __srcp;
+    for (int i = 1; i <= radiusVertical; i++) {
+        _srcp[radiusVertical - i] = _srcp[radiusVertical + i - 1];
+        _srcp[radiusVertical + i] = _srcp[radiusVertical] + stride * i;
     }
 
     for (int y = 0; y < height; y++) {
@@ -87,19 +89,19 @@ void gaussianBlurVertical_SSE2(const uint16_t * __srcp, float * buffer, float * 
                 const Vec8us srcp_8us { _mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x)) };
                 const Vec4i srcp_4i = Vec4i(extend_low(srcp_8us));
                 const Vec4f srcp = to_float(srcp_4i);
-                sum = mul_add(srcp, weights[i], sum);
+                sum = mul_add(srcp, weightsVertical[i], sum);
             }
 
             sum.store_a(buffer + x);
         }
 
-        gaussianBlurHorizontal_SSE2(buffer, blur, weights + radius, width, radius);
+        gaussianBlurHorizontal_SSE2(buffer, blur, weightsHorizontal + radiusHorizontal, width, radiusHorizontal);
 
         for (unsigned i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-        if (y < height - 1 - radius)
+        if (y < height - 1 - radiusVertical)
             _srcp[diameter - 1] += stride;
-        else if (y > height - 1 - radius)
+        else if (y > height - 1 - radiusVertical)
             _srcp[diameter - 1] -= stride;
         blur += blurStride;
     }
@@ -108,15 +110,16 @@ void gaussianBlurVertical_SSE2(const uint16_t * __srcp, float * buffer, float * 
 }
 
 template<>
-void gaussianBlurVertical_SSE2(const float * __srcp, float * buffer, float * blur, const float * weights, const unsigned width, const int height,
-                               const unsigned stride, const unsigned blurStride, const int radius, const float offset) noexcept {
-    const unsigned diameter = radius * 2 + 1;
+void gaussianBlurVertical_SSE2(const float * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
+                               const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
+                               const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
+    const unsigned diameter = radiusVertical * 2 + 1;
     const float ** _srcp = new const float *[diameter];
 
-    _srcp[radius] = __srcp;
-    for (int i = 1; i <= radius; i++) {
-        _srcp[radius - i] = _srcp[radius + i - 1];
-        _srcp[radius + i] = _srcp[radius] + stride * i;
+    _srcp[radiusVertical] = __srcp;
+    for (int i = 1; i <= radiusVertical; i++) {
+        _srcp[radiusVertical - i] = _srcp[radiusVertical + i - 1];
+        _srcp[radiusVertical + i] = _srcp[radiusVertical] + stride * i;
     }
 
     for (int y = 0; y < height; y++) {
@@ -125,19 +128,19 @@ void gaussianBlurVertical_SSE2(const float * __srcp, float * buffer, float * blu
 
             for (unsigned i = 0; i < diameter; i++) {
                 const Vec4f srcp = Vec4f().load_a(_srcp[i] + x);
-                sum = mul_add(srcp + offset, weights[i], sum);
+                sum = mul_add(srcp + offset, weightsVertical[i], sum);
             }
 
             sum.store_a(buffer + x);
         }
 
-        gaussianBlurHorizontal_SSE2(buffer, blur, weights + radius, width, radius);
+        gaussianBlurHorizontal_SSE2(buffer, blur, weightsHorizontal + radiusHorizontal, width, radiusHorizontal);
 
         for (unsigned i = 0; i < diameter - 1; i++)
             _srcp[i] = _srcp[i + 1];
-        if (y < height - 1 - radius)
+        if (y < height - 1 - radiusVertical)
             _srcp[diameter - 1] += stride;
-        else if (y > height - 1 - radius)
+        else if (y > height - 1 - radiusVertical)
             _srcp[diameter - 1] -= stride;
         blur += blurStride;
     }
