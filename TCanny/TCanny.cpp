@@ -23,10 +23,10 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 #include <VapourSynth.h>
@@ -68,12 +68,12 @@ static constexpr float M_PIF = 3.14159265358979323846f;
 static constexpr float M_1_PIF = 0.318309886183790671538f;
 
 static void (*gaussianBlurHorizontal)(float *, float *, const float *, const int, const int);
-template<typename T> void (*gaussianBlurVertical)(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float);
+template<typename T> static void (*gaussianBlurVertical)(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float);
 static void (*detectEdge)(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned);
 static void (*nonMaximumSuppression)(const float *, const float *, float *, const int, const unsigned, const int, const unsigned);
-template<typename T> void (*outputGB)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float);
-template<typename T> void (*binarizeCE)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float);
-template<typename T> void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float);
+template<typename T> static void (*outputGB)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float);
+template<typename T> static void (*binarizeCE)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float);
+template<typename T> static void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float);
 
 struct TCannyData {
     VSNodeRef * node;
@@ -114,7 +114,7 @@ static float * gaussianWeights(const float sigma, int * radius) noexcept {
 
 template<typename T>
 static inline T getBin(const float dir, const unsigned n) noexcept {
-    if (!std::is_same<T, float>::value) {
+    if (std::is_integral<T>::value) {
         const unsigned bin = static_cast<unsigned>(dir * n * M_1_PIF + 0.5f);
         return (bin >= n) ? 0 : bin;
     } else {
@@ -157,7 +157,7 @@ static void gaussianBlurVertical_C(const T * _srcp, float * VS_RESTRICT buffer, 
             float sum = 0.f;
 
             for (unsigned i = 0; i < diameter; i++) {
-                if (!std::is_same<T, float>::value)
+                if (std::is_integral<T>::value)
                     sum += srcp[i][x] * weightsVertical[i];
                 else
                     sum += (srcp[i][x] + offset) * weightsVertical[i];
@@ -214,9 +214,7 @@ static void detectEdge_C(float * blur, float * VS_RESTRICT gradient, float * VS_
 
             if (mode != 1) {
                 float dr = std::atan2(gy, gx);
-                if (dr < 0.f)
-                    dr += M_PIF;
-                direction[x] = dr;
+                direction[x] = (dr < 0.f) ? dr + M_PIF : dr;
             }
         }
 
@@ -290,7 +288,7 @@ static void outputGB_C(const float * blur, T * VS_RESTRICT dstp, const unsigned 
                        const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
-            if (!std::is_same<T, float>::value)
+            if (std::is_integral<T>::value)
                 dstp[x] = std::min<unsigned>(static_cast<unsigned>(blur[x] + 0.5f), peak);
             else
                 dstp[x] = std::min(blur[x] - offset, upper);
@@ -306,7 +304,7 @@ static void binarizeCE_C(const float * blur, T * VS_RESTRICT dstp, const unsigne
                          const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
-            if (!std::is_same<T, float>::value)
+            if (std::is_integral<T>::value)
                 dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? peak : 0;
             else
                 dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? upper : lower;
@@ -322,7 +320,7 @@ static void discretizeGM_C(const float * gradient, T * VS_RESTRICT dstp, const u
                            const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
-            if (!std::is_same<T, float>::value)
+            if (std::is_integral<T>::value)
                 dstp[x] = std::min<unsigned>(static_cast<unsigned>(gradient[x] * magnitude + 0.5f), peak);
             else
                 dstp[x] = std::min(gradient[x] * magnitude - offset, upper);
@@ -338,7 +336,7 @@ static void discretizeDM_T(const float * blur, const float * direction, T * VS_R
                            const unsigned stride, const unsigned blurStride, const unsigned bins, const float offset, const float lower) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
-            if (!std::is_same<T, float>::value)
+            if (std::is_integral<T>::value)
                 dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? getBin<T>(direction[x], bins) : 0;
             else
                 dstp[x] = (blur[x] == std::numeric_limits<float>::max()) ? getBin<float>(direction[x], bins) - offset : lower;
@@ -355,7 +353,7 @@ static void discretizeDM(const float * direction, T * VS_RESTRICT dstp, const un
                          const unsigned bins, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
-            if (!std::is_same<T, float>::value)
+            if (std::is_integral<T>::value)
                 dstp[x] = getBin<T>(direction[x], bins);
             else
                 dstp[x] = getBin<float>(direction[x], bins) - offset;
@@ -549,16 +547,16 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
                 } else {
                     d->gradient.emplace(threadId, nullptr);
                 }
+            }
 
-                if (!d->direction.count(threadId)) {
-                    if (d->mode != 1) {
-                        float * direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
-                        if (!direction)
-                            throw std::string { "malloc failure (direction)" };
-                        d->direction.emplace(threadId, direction);
-                    } else {
-                        d->direction.emplace(threadId, nullptr);
-                    }
+            if (!d->direction.count(threadId)) {
+                if (d->mode != -1 && d->mode != 1) {
+                    float * direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
+                    if (!direction)
+                        throw std::string { "malloc failure (direction)" };
+                    d->direction.emplace(threadId, direction);
+                } else {
+                    d->direction.emplace(threadId, nullptr);
                 }
             }
 
@@ -572,7 +570,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
                     d->label.emplace(threadId, nullptr);
                 }
             }
-        } catch (std::string & error) {
+        } catch (const std::string & error) {
             vsapi->setFilterError(("TCanny: " + error).c_str(), frameCtx);
             vsapi->freeFrame(src);
             vsapi->freeFrame(dst);
@@ -622,22 +620,22 @@ static void VS_CC tcannyFree(void *instanceData, VSCore *core, const VSAPI *vsap
 }
 
 static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi) {
-    TCannyData d {};
+    std::unique_ptr<TCannyData> d{ new TCannyData{} };
     int err;
 
-    d.node = vsapi->propGetNode(in, "clip", 0, nullptr);
-    d.vi = vsapi->getVideoInfo(d.node);
+    d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
+    d->vi = vsapi->getVideoInfo(d->node);
 
     try {
-        if (!isConstantFormat(d.vi) || (d.vi->format->sampleType == stInteger && d.vi->format->bitsPerSample > 16) ||
-            (d.vi->format->sampleType == stFloat && d.vi->format->bitsPerSample != 32))
+        if (!isConstantFormat(d->vi) || (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
+            (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
             throw std::string { "only constant format 8-16 bits integer and 32 bits float input supported" };
 
-        if (d.vi->height < 2)
+        if (d->vi->height < 2)
             throw std::string { "the clip's height must be greater than or equal to 2" };
 
         const int numSigma = vsapi->propNumElements(in, "sigma");
-        if (numSigma > d.vi->format->numPlanes)
+        if (numSigma > d->vi->format->numPlanes)
             throw std::string { "more sigma given than the number of planes" };
 
         float sigmaHorizontal[3], sigmaVertical[3];
@@ -648,27 +646,27 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
             } else if (i == 0) {
                 sigmaHorizontal[0] = sigmaVertical[0] = 1.5f;
             } else if (i == 1) {
-                sigmaHorizontal[1] = sigmaHorizontal[0] / (1 << d.vi->format->subSamplingW);
-                sigmaVertical[1] = sigmaVertical[0] / (1 << d.vi->format->subSamplingH);
+                sigmaHorizontal[1] = sigmaHorizontal[0] / (1 << d->vi->format->subSamplingW);
+                sigmaVertical[1] = sigmaVertical[0] / (1 << d->vi->format->subSamplingH);
             } else {
                 sigmaHorizontal[2] = sigmaHorizontal[1];
                 sigmaVertical[2] = sigmaVertical[1];
             }
         }
 
-        d.t_h = static_cast<float>(vsapi->propGetFloat(in, "t_h", 0, &err));
+        d->t_h = static_cast<float>(vsapi->propGetFloat(in, "t_h", 0, &err));
         if (err)
-            d.t_h = 8.f;
+            d->t_h = 8.f;
 
-        d.t_l = static_cast<float>(vsapi->propGetFloat(in, "t_l", 0, &err));
+        d->t_l = static_cast<float>(vsapi->propGetFloat(in, "t_l", 0, &err));
         if (err)
-            d.t_l = 1.f;
+            d->t_l = 1.f;
 
-        d.mode = int64ToIntS(vsapi->propGetInt(in, "mode", 0, &err));
+        d->mode = int64ToIntS(vsapi->propGetInt(in, "mode", 0, &err));
 
-        d.op = int64ToIntS(vsapi->propGetInt(in, "op", 0, &err));
+        d->op = int64ToIntS(vsapi->propGetInt(in, "op", 0, &err));
         if (err)
-            d.op = 1;
+            d->op = 1;
 
         float gmmax = static_cast<float>(vsapi->propGetFloat(in, "gmmax", 0, &err));
         if (err)
@@ -681,13 +679,13 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
                 throw std::string { "sigma must be greater than 0.0" };
         }
 
-        if (d.t_l >= d.t_h)
+        if (d->t_l >= d->t_h)
             throw std::string { "t_h must be greater than t_l" };
 
-        if (d.mode < -1 || d.mode > 3)
+        if (d->mode < -1 || d->mode > 3)
             throw std::string { "mode must be -1, 0, 1, 2 or 3" };
 
-        if (d.op < 0 || d.op > 3)
+        if (d->op < 0 || d->op > 3)
             throw std::string { "op must be 0, 1, 2 or 3" };
 
         if (gmmax < 1.f)
@@ -699,74 +697,72 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         const int m = vsapi->propNumElements(in, "planes");
 
         for (int i = 0; i < 3; i++)
-            d.process[i] = m <= 0;
+            d->process[i] = m <= 0;
 
         for (int i = 0; i < m; i++) {
             const int n = int64ToIntS(vsapi->propGetInt(in, "planes", i, nullptr));
 
-            if (n < 0 || n >= d.vi->format->numPlanes)
+            if (n < 0 || n >= d->vi->format->numPlanes)
                 throw std::string { "plane index out of range" };
 
-            if (d.process[n])
+            if (d->process[n])
                 throw std::string { "plane specified twice" };
 
-            d.process[n] = true;
+            d->process[n] = true;
         }
 
-        if (d.vi->format->sampleType == stInteger) {
-            d.bins = 1 << d.vi->format->bitsPerSample;
-            d.peak = d.bins - 1;
-            const float scale = d.peak / 255.f;
-            d.t_h *= scale;
-            d.t_l *= scale;
+        if (d->vi->format->sampleType == stInteger) {
+            d->bins = 1 << d->vi->format->bitsPerSample;
+            d->peak = d->bins - 1;
+            const float scale = d->peak / 255.f;
+            d->t_h *= scale;
+            d->t_l *= scale;
         } else {
-            d.t_h /= 255.f;
-            d.t_l /= 255.f;
-            d.bins = 1;
+            d->t_h /= 255.f;
+            d->t_l /= 255.f;
+            d->bins = 1;
 
-            for (int plane = 0; plane < d.vi->format->numPlanes; plane++) {
-                if (plane == 0 || d.vi->format->colorFamily == cmRGB) {
-                    d.offset[plane] = 0.f;
-                    d.lower[plane] = 0.f;
-                    d.upper[plane] = 1.f;
+            for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
+                if (plane == 0 || d->vi->format->colorFamily == cmRGB) {
+                    d->offset[plane] = 0.f;
+                    d->lower[plane] = 0.f;
+                    d->upper[plane] = 1.f;
                 } else {
-                    d.offset[plane] = 0.5f;
-                    d.lower[plane] = -0.5f;
-                    d.upper[plane] = 0.5f;
+                    d->offset[plane] = 0.5f;
+                    d->lower[plane] = -0.5f;
+                    d->upper[plane] = 0.5f;
                 }
             }
         }
 
-        for (int plane = 0; plane < d.vi->format->numPlanes; plane++) {
-            if (d.process[plane]) {
-                d.weightsHorizontal[plane] = gaussianWeights(sigmaHorizontal[plane], &d.radiusHorizontal[plane]);
-                d.weightsVertical[plane] = gaussianWeights(sigmaVertical[plane], &d.radiusVertical[plane]);
-                if (!d.weightsHorizontal[plane] || !d.weightsVertical[plane])
+        for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
+            if (d->process[plane]) {
+                d->weightsHorizontal[plane] = gaussianWeights(sigmaHorizontal[plane], &d->radiusHorizontal[plane]);
+                d->weightsVertical[plane] = gaussianWeights(sigmaVertical[plane], &d->radiusVertical[plane]);
+                if (!d->weightsHorizontal[plane] || !d->weightsVertical[plane])
                     throw std::string { "malloc failure (weights)" };
             }
         }
 
-        d.radiusAlign = (std::max({ d.radiusHorizontal[0], d.radiusHorizontal[1], d.radiusHorizontal[2] }) + 7) & -8;
+        d->radiusAlign = (std::max({ d->radiusHorizontal[0], d->radiusHorizontal[1], d->radiusHorizontal[2] }) + 7) & -8;
 
-        d.magnitude = 255.f / gmmax;
+        d->magnitude = 255.f / gmmax;
 
         const int numThreads = vsapi->getCoreInfo(core)->numThreads;
-        d.buffer.reserve(numThreads);
-        d.blur.reserve(numThreads);
-        d.gradient.reserve(numThreads);
-        d.direction.reserve(numThreads);
-        d.label.reserve(numThreads);
+        d->buffer.reserve(numThreads);
+        d->blur.reserve(numThreads);
+        d->gradient.reserve(numThreads);
+        d->direction.reserve(numThreads);
+        d->label.reserve(numThreads);
 
         selectFunctions(opt);
-    } catch (std::string & error) {
+    } catch (const std::string & error) {
         vsapi->setError(out, ("TCanny: " + error).c_str());
-        vsapi->freeNode(d.node);
+        vsapi->freeNode(d->node);
         return;
     }
 
-    TCannyData * data = new TCannyData { std::move(d) };
-
-    vsapi->createFilter(in, out, "TCanny", tcannyInit, tcannyGetFrame, tcannyFree, fmParallel, 0, data, core);
+    vsapi->createFilter(in, out, "TCanny", tcannyInit, tcannyGetFrame, tcannyFree, fmParallel, 0, d.release(), core);
 }
 
 //////////////////////////////////////////

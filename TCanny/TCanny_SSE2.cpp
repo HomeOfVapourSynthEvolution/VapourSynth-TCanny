@@ -13,7 +13,7 @@ void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, const float * wei
     }
 
     for (int x = 0; x < width; x += 4) {
-        Vec4f sum = setzero_4f();
+        Vec4f sum = zero_4f();
 
         for (int i = -radius; i <= radius; i++) {
             const Vec4f srcp = Vec4f().load(buffer + x + i);
@@ -41,13 +41,10 @@ void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * b
 
     for (int y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
-            Vec4f sum = setzero_4f();
+            Vec4f sum = zero_4f();
 
             for (unsigned i = 0; i < diameter; i++) {
-                const Vec16uc srcp_16uc { _mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x)) };
-                const Vec8us srcp_8us = extend_low(srcp_16uc);
-                const Vec4i srcp_4i = Vec4i(extend_low(srcp_8us));
-                const Vec4f srcp = to_float(srcp_4i);
+                const Vec4f srcp = to_float(Vec4i().load_4uc(_srcp[i] + x));
                 sum = mul_add(srcp, weightsVertical[i], sum);
             }
 
@@ -83,12 +80,10 @@ void gaussianBlurVertical_SSE2(const uint16_t * __srcp, float * buffer, float * 
 
     for (int y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
-            Vec4f sum = setzero_4f();
+            Vec4f sum = zero_4f();
 
             for (unsigned i = 0; i < diameter; i++) {
-                const Vec8us srcp_8us { _mm_loadl_epi64(reinterpret_cast<const __m128i *>(_srcp[i] + x)) };
-                const Vec4i srcp_4i = Vec4i(extend_low(srcp_8us));
-                const Vec4f srcp = to_float(srcp_4i);
+                const Vec4f srcp = to_float(Vec4i().load_4us(_srcp[i] + x));
                 sum = mul_add(srcp, weightsVertical[i], sum);
             }
 
@@ -124,7 +119,7 @@ void gaussianBlurVertical_SSE2(const float * __srcp, float * buffer, float * blu
 
     for (int y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
-            Vec4f sum = setzero_4f();
+            Vec4f sum = zero_4f();
 
             for (unsigned i = 0; i < diameter; i++) {
                 const Vec4f srcp = Vec4f().load_a(_srcp[i] + x);
