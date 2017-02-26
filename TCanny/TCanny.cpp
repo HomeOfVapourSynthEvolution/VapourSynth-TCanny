@@ -35,6 +35,10 @@
 #ifdef VS_TARGET_CPU_X86
 #include "vectorclass/vectorclass.h"
 
+template<typename T> extern void copyData_SSE2(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float);
+template<typename T> extern void copyData_AVX(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float);
+template<typename T> extern void copyData_AVX2(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float);
+
 extern void gaussianBlurHorizontal_SSE2(float *, float *, const float *, const int, const int);
 extern void gaussianBlurHorizontal_AVX(float *, float *, const float *, const int, const int);
 extern void gaussianBlurHorizontal_AVX2(float *, float *, const float *, const int, const int);
@@ -67,6 +71,7 @@ template<typename T> extern void discretizeGM_AVX2(const float *, T *, const uns
 static constexpr float M_PIF = 3.14159265358979323846f;
 static constexpr float M_1_PIF = 0.318309886183790671538f;
 
+template<typename T> static void (*copyData)(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float);
 static void (*gaussianBlurHorizontal)(float *, float *, const float *, const int, const int);
 template<typename T> static void (*gaussianBlurVertical)(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float);
 static void (*detectEdge)(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned);
@@ -120,6 +125,31 @@ static inline T getBin(const float dir, const unsigned n) noexcept {
     } else {
         const float bin = dir * M_1_PIF;
         return (bin > n) ? 0.f : bin;
+    }
+}
+
+template<typename T>
+static void copyData_C(const T * srcp, float * VS_RESTRICT blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
+    if (std::is_integral<T>::value) {
+        for (unsigned y = 0; y < height; y++) {
+            for (unsigned x = 0; x < width; x++)
+                blur[x] = srcp[x];
+
+            srcp += stride;
+            blur += blurStride;
+        }
+    } else {
+        if (offset) {
+            for (unsigned y = 0; y < height; y++) {
+                for (unsigned x = 0; x < width; x++)
+                    blur[x] = srcp[x] + offset;
+
+                srcp += stride;
+                blur += blurStride;
+            }
+        } else {
+            vs_bitblt(blur, blurStride * sizeof(float), srcp, stride * sizeof(float), width * sizeof(float), height);
+        }
     }
 }
 
@@ -382,7 +412,10 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData *
             float * direction = d->direction.at(threadId);
             uint8_t * label = d->label.at(threadId);
 
-            gaussianBlurVertical<T>(srcp, buffer, blur, d->weightsHorizontal[plane], d->weightsVertical[plane], width, height, stride, blurStride, d->radiusHorizontal[plane], d->radiusVertical[plane], d->offset[plane]);
+            if (d->radiusHorizontal[plane])
+                gaussianBlurVertical<T>(srcp, buffer, blur, d->weightsHorizontal[plane], d->weightsVertical[plane], width, height, stride, blurStride, d->radiusHorizontal[plane], d->radiusVertical[plane], d->offset[plane]);
+            else
+                copyData<T>(srcp, blur, width, height, stride, blurStride, d->offset[plane]);
 
             if (d->mode != -1)
                 detectEdge(blur, gradient, direction, width, height, stride, blurStride, d->mode, d->op);
@@ -407,6 +440,10 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData *
 }
 
 static void selectFunctions(const unsigned opt) noexcept {
+    copyData<uint8_t> = copyData_C;
+    copyData<uint16_t> = copyData_C;
+    copyData<float> = copyData_C;
+
     gaussianBlurHorizontal = gaussianBlurHorizontal_C;
 
     gaussianBlurVertical<uint8_t> = gaussianBlurVertical_C;
@@ -432,6 +469,10 @@ static void selectFunctions(const unsigned opt) noexcept {
 #ifdef VS_TARGET_CPU_X86
     const int iset = instrset_detect();
     if (opt == 4 || (opt == 0 && iset >= 8)) {
+        copyData<uint8_t> = copyData_AVX2;
+        copyData<uint16_t> = copyData_AVX2;
+        copyData<float> = copyData_AVX2;
+
         gaussianBlurHorizontal = gaussianBlurHorizontal_AVX2;
 
         gaussianBlurVertical<uint8_t> = gaussianBlurVertical_AVX2;
@@ -454,6 +495,10 @@ static void selectFunctions(const unsigned opt) noexcept {
         discretizeGM<uint16_t> = discretizeGM_AVX2;
         discretizeGM<float> = discretizeGM_AVX2;
     } else if (opt == 3 || (opt == 0 && iset == 7)) {
+        copyData<uint8_t> = copyData_AVX;
+        copyData<uint16_t> = copyData_AVX;
+        copyData<float> = copyData_AVX;
+
         gaussianBlurHorizontal = gaussianBlurHorizontal_AVX;
 
         gaussianBlurVertical<uint8_t> = gaussianBlurVertical_AVX;
@@ -476,6 +521,10 @@ static void selectFunctions(const unsigned opt) noexcept {
         discretizeGM<uint16_t> = discretizeGM_AVX;
         discretizeGM<float> = discretizeGM_AVX;
     } else if (opt == 2 || (opt == 0 && iset >= 2)) {
+        copyData<uint8_t> = copyData_SSE2;
+        copyData<uint16_t> = copyData_SSE2;
+        copyData<float> = copyData_SSE2;
+
         gaussianBlurHorizontal = gaussianBlurHorizontal_SSE2;
 
         gaussianBlurVertical<uint8_t> = gaussianBlurVertical_SSE2;
@@ -675,8 +724,8 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         const int opt = int64ToIntS(vsapi->propGetInt(in, "opt", 0, &err));
 
         for (int i = 0; i < 3; i++) {
-            if (sigmaHorizontal[i] <= 0.f)
-                throw std::string { "sigma must be greater than 0.0" };
+            if (sigmaHorizontal[i] < 0.f)
+                throw std::string { "sigma must be greater than or equal to 0.0" };
         }
 
         if (d->t_l >= d->t_h)
@@ -736,7 +785,7 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         }
 
         for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
-            if (d->process[plane]) {
+            if (d->process[plane] && sigmaHorizontal[plane]) {
                 d->weightsHorizontal[plane] = gaussianWeights(sigmaHorizontal[plane], &d->radiusHorizontal[plane]);
                 d->weightsVertical[plane] = gaussianWeights(sigmaVertical[plane], &d->radiusVertical[plane]);
                 if (!d->weightsHorizontal[plane] || !d->weightsVertical[plane])

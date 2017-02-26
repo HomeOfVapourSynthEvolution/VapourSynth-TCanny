@@ -6,6 +6,41 @@
 static constexpr float M_PIF = 3.14159265358979323846f;
 static constexpr float M_1_PIF = 0.318309886183790671538f;
 
+template<typename T> void copyData_SSE2(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
+
+template<>
+void copyData_SSE2(const uint8_t * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
+    for (unsigned y = 0; y < height; y++) {
+        for (unsigned x = 0; x < width; x += 4)
+            to_float(Vec4i().load_4uc(srcp + x)).stream(blur + x);
+
+        srcp += stride;
+        blur += blurStride;
+    }
+}
+
+template<>
+void copyData_SSE2(const uint16_t * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
+    for (unsigned y = 0; y < height; y++) {
+        for (unsigned x = 0; x < width; x += 4)
+            to_float(Vec4i().load_4us(srcp + x)).stream(blur + x);
+
+        srcp += stride;
+        blur += blurStride;
+    }
+}
+
+template<>
+void copyData_SSE2(const float * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
+    for (unsigned y = 0; y < height; y++) {
+        for (unsigned x = 0; x < width; x += 4)
+            (Vec4f().load_a(srcp + x) + offset).stream(blur + x);
+
+        srcp += stride;
+        blur += blurStride;
+    }
+}
+
 void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
         buffer[-i] = buffer[i - 1];
