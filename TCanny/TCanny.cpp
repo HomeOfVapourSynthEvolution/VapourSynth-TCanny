@@ -24,6 +24,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <string>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
