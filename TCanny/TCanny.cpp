@@ -72,14 +72,13 @@ template<typename T> extern void discretizeGM_AVX2(const float *, T *, const uns
 static constexpr float M_PIF = 3.14159265358979323846f;
 static constexpr float M_1_PIF = 0.318309886183790671538f;
 
-template<typename T> static void (*copyData)(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float);
-static void (*gaussianBlurHorizontal)(float *, float *, const float *, const int, const int);
-template<typename T> static void (*gaussianBlurVertical)(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float);
-static void (*detectEdge)(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned);
-static void (*nonMaximumSuppression)(const float *, const float *, float *, const int, const unsigned, const int, const unsigned);
-template<typename T> static void (*outputGB)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float);
-template<typename T> static void (*binarizeCE)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float);
-template<typename T> static void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float);
+template<typename T> static void (*copyData)(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) = nullptr;
+template<typename T> static void (*gaussianBlurVertical)(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) = nullptr;
+static void (*detectEdge)(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned) = nullptr;
+static void (*nonMaximumSuppression)(const float *, const float *, float *, const int, const unsigned, const int, const unsigned) = nullptr;
+template<typename T> static void (*outputGB)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) = nullptr;
+template<typename T> static void (*binarizeCE)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) = nullptr;
+template<typename T> static void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) = nullptr;
 
 struct TCannyData {
     VSNodeRef * node;
@@ -445,8 +444,6 @@ static void selectFunctions(const unsigned opt) noexcept {
     copyData<uint16_t> = copyData_C;
     copyData<float> = copyData_C;
 
-    gaussianBlurHorizontal = gaussianBlurHorizontal_C;
-
     gaussianBlurVertical<uint8_t> = gaussianBlurVertical_C;
     gaussianBlurVertical<uint16_t> = gaussianBlurVertical_C;
     gaussianBlurVertical<float> = gaussianBlurVertical_C;
@@ -474,8 +471,6 @@ static void selectFunctions(const unsigned opt) noexcept {
         copyData<uint16_t> = copyData_AVX2;
         copyData<float> = copyData_AVX2;
 
-        gaussianBlurHorizontal = gaussianBlurHorizontal_AVX2;
-
         gaussianBlurVertical<uint8_t> = gaussianBlurVertical_AVX2;
         gaussianBlurVertical<uint16_t> = gaussianBlurVertical_AVX2;
         gaussianBlurVertical<float> = gaussianBlurVertical_AVX2;
@@ -500,8 +495,6 @@ static void selectFunctions(const unsigned opt) noexcept {
         copyData<uint16_t> = copyData_AVX;
         copyData<float> = copyData_AVX;
 
-        gaussianBlurHorizontal = gaussianBlurHorizontal_AVX;
-
         gaussianBlurVertical<uint8_t> = gaussianBlurVertical_AVX;
         gaussianBlurVertical<uint16_t> = gaussianBlurVertical_AVX;
         gaussianBlurVertical<float> = gaussianBlurVertical_AVX;
@@ -525,8 +518,6 @@ static void selectFunctions(const unsigned opt) noexcept {
         copyData<uint8_t> = copyData_SSE2;
         copyData<uint16_t> = copyData_SSE2;
         copyData<float> = copyData_SSE2;
-
-        gaussianBlurHorizontal = gaussianBlurHorizontal_SSE2;
 
         gaussianBlurVertical<uint8_t> = gaussianBlurVertical_SSE2;
         gaussianBlurVertical<uint16_t> = gaussianBlurVertical_SSE2;
