@@ -1,45 +1,32 @@
 #ifdef VS_TARGET_CPU_X86
 #include <limits>
+#include <type_traits>
 
 #include "vectorclass/vectormath_trig.h"
 
 static constexpr float M_PIF = 3.14159265358979323846f;
 static constexpr float M_1_PIF = 0.318309886183790671538f;
 
-template<typename T> void copyData_SSE2(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
-
-template<>
-void copyData_SSE2(const uint8_t * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
+template<typename T>
+void copyData_SSE2(const T * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x += 4)
-            to_float(Vec4i().load_4uc(srcp + x)).stream(blur + x);
+        for (unsigned x = 0; x < width; x += 4) {
+            if (std::is_same<T, uint8_t>::value)
+                to_float(Vec4i().load_4uc(srcp + x)).stream(blur + x);
+            else if (std::is_same<T, uint16_t>::value)
+                to_float(Vec4i().load_4us(srcp + x)).stream(blur + x);
+            else
+                (Vec4f().load_a(srcp + x) + offset).stream(blur + x);
+        }
 
         srcp += stride;
         blur += blurStride;
     }
 }
 
-template<>
-void copyData_SSE2(const uint16_t * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
-    for (unsigned y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x += 4)
-            to_float(Vec4i().load_4us(srcp + x)).stream(blur + x);
-
-        srcp += stride;
-        blur += blurStride;
-    }
-}
-
-template<>
-void copyData_SSE2(const float * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
-    for (unsigned y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x += 4)
-            (Vec4f().load_a(srcp + x) + offset).stream(blur + x);
-
-        srcp += stride;
-        blur += blurStride;
-    }
-}
+template void copyData_SSE2(const uint8_t *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
+template void copyData_SSE2(const uint16_t *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
+template void copyData_SSE2(const float *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
 
 void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
@@ -59,14 +46,12 @@ void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, const float * wei
     }
 }
 
-template<typename T> void gaussianBlurVertical_SSE2(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) noexcept;
-
-template<>
-void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
+template<typename T>
+void gaussianBlurVertical_SSE2(const T * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
                                const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
                                const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
     const unsigned diameter = radiusVertical * 2 + 1;
-    const uint8_t ** _srcp = new const uint8_t *[diameter];
+    const T ** _srcp = new const T *[diameter];
 
     _srcp[radiusVertical] = __srcp;
     for (int i = 1; i <= radiusVertical; i++) {
@@ -79,8 +64,16 @@ void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * b
             Vec4f sum = zero_4f();
 
             for (unsigned i = 0; i < diameter; i++) {
-                const Vec4f srcp = to_float(Vec4i().load_4uc(_srcp[i] + x));
-                sum = mul_add(srcp, weightsVertical[i], sum);
+                if (std::is_same<T, uint8_t>::value) {
+                    const Vec4f srcp = to_float(Vec4i().load_4uc(_srcp[i] + x));
+                    sum = mul_add(srcp, weightsVertical[i], sum);
+                } else if (std::is_same<T, uint16_t>::value) {
+                    const Vec4f srcp = to_float(Vec4i().load_4us(_srcp[i] + x));
+                    sum = mul_add(srcp, weightsVertical[i], sum);
+                } else {
+                    const Vec4f srcp = Vec4f().load_a(_srcp[i] + x);
+                    sum = mul_add(srcp + offset, weightsVertical[i], sum);
+                }
             }
 
             sum.store_a(buffer + x);
@@ -100,83 +93,9 @@ void gaussianBlurVertical_SSE2(const uint8_t * __srcp, float * buffer, float * b
     delete[] _srcp;
 }
 
-template<>
-void gaussianBlurVertical_SSE2(const uint16_t * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
-                               const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
-                               const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
-    const unsigned diameter = radiusVertical * 2 + 1;
-    const uint16_t ** _srcp = new const uint16_t *[diameter];
-
-    _srcp[radiusVertical] = __srcp;
-    for (int i = 1; i <= radiusVertical; i++) {
-        _srcp[radiusVertical - i] = _srcp[radiusVertical + i - 1];
-        _srcp[radiusVertical + i] = _srcp[radiusVertical] + stride * i;
-    }
-
-    for (int y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x += 4) {
-            Vec4f sum = zero_4f();
-
-            for (unsigned i = 0; i < diameter; i++) {
-                const Vec4f srcp = to_float(Vec4i().load_4us(_srcp[i] + x));
-                sum = mul_add(srcp, weightsVertical[i], sum);
-            }
-
-            sum.store_a(buffer + x);
-        }
-
-        gaussianBlurHorizontal_SSE2(buffer, blur, weightsHorizontal + radiusHorizontal, width, radiusHorizontal);
-
-        for (unsigned i = 0; i < diameter - 1; i++)
-            _srcp[i] = _srcp[i + 1];
-        if (y < height - 1 - radiusVertical)
-            _srcp[diameter - 1] += stride;
-        else if (y > height - 1 - radiusVertical)
-            _srcp[diameter - 1] -= stride;
-        blur += blurStride;
-    }
-
-    delete[] _srcp;
-}
-
-template<>
-void gaussianBlurVertical_SSE2(const float * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
-                               const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
-                               const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
-    const unsigned diameter = radiusVertical * 2 + 1;
-    const float ** _srcp = new const float *[diameter];
-
-    _srcp[radiusVertical] = __srcp;
-    for (int i = 1; i <= radiusVertical; i++) {
-        _srcp[radiusVertical - i] = _srcp[radiusVertical + i - 1];
-        _srcp[radiusVertical + i] = _srcp[radiusVertical] + stride * i;
-    }
-
-    for (int y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x += 4) {
-            Vec4f sum = zero_4f();
-
-            for (unsigned i = 0; i < diameter; i++) {
-                const Vec4f srcp = Vec4f().load_a(_srcp[i] + x);
-                sum = mul_add(srcp + offset, weightsVertical[i], sum);
-            }
-
-            sum.store_a(buffer + x);
-        }
-
-        gaussianBlurHorizontal_SSE2(buffer, blur, weightsHorizontal + radiusHorizontal, width, radiusHorizontal);
-
-        for (unsigned i = 0; i < diameter - 1; i++)
-            _srcp[i] = _srcp[i + 1];
-        if (y < height - 1 - radiusVertical)
-            _srcp[diameter - 1] += stride;
-        else if (y > height - 1 - radiusVertical)
-            _srcp[diameter - 1] -= stride;
-        blur += blurStride;
-    }
-
-    delete[] _srcp;
-}
+template void gaussianBlurVertical_SSE2(const uint8_t *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) noexcept;
+template void gaussianBlurVertical_SSE2(const uint16_t *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) noexcept;
+template void gaussianBlurVertical_SSE2(const float *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) noexcept;
 
 void detectEdge_SSE2(float * blur, float * gradient, float * direction, const int width, const unsigned height,
                      const unsigned stride, const unsigned blurStride, const int mode, const unsigned op) noexcept {

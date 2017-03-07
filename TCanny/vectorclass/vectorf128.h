@@ -471,8 +471,8 @@ public:
         return xmm;
     }
     // Member function to load from array (unaligned)
-    Vec4f & load(float const * p) {
-        xmm = _mm_loadu_ps(p);
+    Vec4f & load(void const * p) {
+        xmm = _mm_loadu_ps((float const*)p);
         return *this;
     }
     // Member function to load from array, aligned by 16
@@ -480,8 +480,8 @@ public:
     // Merom, Wolfdale) and Atom, but not on other processors from Intel, AMD or VIA.
     // You may use load_a instead of load if you are certain that p points to an address
     // divisible by 16.
-    Vec4f & load_a(float const * p) {
-        xmm = _mm_load_ps(p);
+    Vec4f & load_a(void const * p) {
+        xmm = _mm_load_ps((float const*)p);
         return *this;
     }
     // Member function to store into array (unaligned)
