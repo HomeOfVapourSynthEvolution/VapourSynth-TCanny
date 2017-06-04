@@ -153,7 +153,7 @@ static void copyData_C(const T * srcp, float * VS_RESTRICT blur, const unsigned 
     }
 }
 
-static void gaussianBlurHorizontal_C(float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int radius) noexcept {
+static inline void gaussianBlurHorizontal_C(float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
         buffer[-i] = buffer[i - 1];
         buffer[width - 1 + i] = buffer[width - i];

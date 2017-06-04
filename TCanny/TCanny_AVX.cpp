@@ -32,7 +32,7 @@ template void copyData_AVX(const uint8_t *, float *, const unsigned, const unsig
 template void copyData_AVX(const uint16_t *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
 template void copyData_AVX(const float *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
 
-void gaussianBlurHorizontal_AVX(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
+static inline void gaussianBlurHorizontal_AVX(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
         buffer[-i] = buffer[i - 1];
         buffer[width - 1 + i] = buffer[width - i];

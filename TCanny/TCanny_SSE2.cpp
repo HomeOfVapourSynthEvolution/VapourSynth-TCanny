@@ -28,7 +28,7 @@ template void copyData_SSE2(const uint8_t *, float *, const unsigned, const unsi
 template void copyData_SSE2(const uint16_t *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
 template void copyData_SSE2(const float *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) noexcept;
 
-void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
+static inline void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
         buffer[-i] = buffer[i - 1];
         buffer[width - 1 + i] = buffer[width - i];
