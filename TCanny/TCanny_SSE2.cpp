@@ -2,7 +2,7 @@
 #include "TCanny.hpp"
 
 template<typename T>
-void copyData_SSE2(const T * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
+void copyData_SSE2(const T * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
             if (std::is_same<T, uint8_t>::value)
@@ -14,7 +14,7 @@ void copyData_SSE2(const T * srcp, float * blur, const unsigned width, const uns
         }
 
         srcp += stride;
-        blur += blurStride;
+        blur += bgStride;
     }
 }
 
@@ -42,7 +42,7 @@ static inline void gaussianBlurHorizontal_SSE2(float * buffer, float * blur, con
 
 template<typename T>
 void gaussianBlurVertical_SSE2(const T * __srcp, float * buffer, float * blur, const float * weightsHorizontal, const float * weightsVertical,
-                               const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
+                               const unsigned width, const int height, const unsigned stride, const unsigned bgStride,
                                const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
     const unsigned diameter = radiusVertical * 2 + 1;
     const T ** _srcp = new const T *[diameter];
@@ -81,7 +81,7 @@ void gaussianBlurVertical_SSE2(const T * __srcp, float * buffer, float * blur, c
             _srcp[diameter - 1] += stride;
         else if (y > height - 1 - radiusVertical)
             _srcp[diameter - 1] -= stride;
-        blur += blurStride;
+        blur += bgStride;
     }
 
     delete[] _srcp;
@@ -92,10 +92,10 @@ template void gaussianBlurVertical_SSE2(const uint16_t *, float *, float *, cons
 template void gaussianBlurVertical_SSE2(const float *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) noexcept;
 
 void detectEdge_SSE2(float * blur, float * gradient, float * direction, const int width, const unsigned height,
-                     const unsigned stride, const unsigned blurStride, const int mode, const unsigned op) noexcept {
+                     const unsigned stride, const unsigned bgStride, const int mode, const unsigned op) noexcept {
     float * srcpp = blur;
     float * srcp = blur;
-    float * srcpn = blur + blurStride;
+    float * srcpn = blur + bgStride;
 
     srcp[-1] = srcp[0];
     srcp[width] = srcp[width - 1];
@@ -138,59 +138,55 @@ void detectEdge_SSE2(float * blur, float * gradient, float * direction, const in
         srcpp = srcp;
         srcp = srcpn;
         if (y < height - 2)
-            srcpn += blurStride;
-        gradient += stride;
+            srcpn += bgStride;
+        gradient += bgStride;
         direction += stride;
     }
 }
 
-void nonMaximumSuppression_SSE2(const float * _gradient, const float * _direction, float * blur, const int width, const unsigned height,
-                                const int stride, const unsigned blurStride) noexcept {
-    for (int x = 0; x < width; x += 4)
-        Vec4f(fltLowest).stream(blur + x);
+void nonMaximumSuppression_SSE2(const float * _direction, float * _gradient, float * blur, const int width, const unsigned height, const unsigned stride, const int bgStride) noexcept {
+    _gradient[-1] = _gradient[0];
+    _gradient[-1 + bgStride * (height - 1)] = _gradient[bgStride * (height - 1)];
+    _gradient[width] = _gradient[width - 1];
+    _gradient[width + bgStride * (height - 1)] = _gradient[width - 1 + bgStride * (height - 1)];
+    std::copy_n(_gradient - 8, width + 16, _gradient - 8 - bgStride);
+    std::copy_n(_gradient - 8 + bgStride * (height - 1), width + 16, _gradient - 8 + bgStride * height);
 
-    for (unsigned y = 1; y < height - 1; y++) {
-        _gradient += stride;
-        _direction += stride;
-        blur += blurStride;
-
-        for (int x = 1; x < width - 1; x += 4) {
-            const Vec4f direction = Vec4f().load(_direction + x);
+    for (unsigned y = 0; y < height; y++) {
+        for (int x = 0; x < width; x += 4) {
+            const Vec4f direction = Vec4f().load_a(_direction + x);
             const Vec4i bin = truncate_to_int(mul_add(direction, 4.f * M_1_PIF, 0.5f));
 
             Vec4fb mask = Vec4fb((bin == 0) | (bin >= 4));
-            Vec4f gradient = max(Vec4f().load(_gradient + x + 1), Vec4f().load_a(_gradient + x - 1));
+            Vec4f gradient = max(Vec4f().load(_gradient + x + 1), Vec4f().load(_gradient + x - 1));
             Vec4f result = gradient & mask;
 
             mask = Vec4fb(bin == 1);
-            gradient = max(Vec4f().load(_gradient + x - stride + 1), Vec4f().load_a(_gradient + x + stride - 1));
+            gradient = max(Vec4f().load(_gradient + x - bgStride + 1), Vec4f().load(_gradient + x + bgStride - 1));
             result |= gradient & mask;
 
             mask = Vec4fb(bin == 2);
-            gradient = max(Vec4f().load(_gradient + x - stride), Vec4f().load(_gradient + x + stride));
+            gradient = max(Vec4f().load_a(_gradient + x - bgStride), Vec4f().load_a(_gradient + x + bgStride));
             result |= gradient & mask;
 
             mask = Vec4fb(bin == 3);
-            gradient = max(Vec4f().load_a(_gradient + x - stride - 1), Vec4f().load(_gradient + x + stride + 1));
+            gradient = max(Vec4f().load(_gradient + x - bgStride - 1), Vec4f().load(_gradient + x + bgStride + 1));
             result |= gradient & mask;
 
-            gradient = Vec4f().load(_gradient + x);
-            select(gradient >= result, gradient, fltLowest).store(blur + x);
+            gradient = Vec4f().load_a(_gradient + x);
+            select(gradient >= result, gradient, fltLowest).stream(blur + x);
         }
 
-        blur[0] = blur[width - 1] = fltLowest;
+        _direction += stride;
+        _gradient += bgStride;
+        blur += bgStride;
     }
-
-    blur += blurStride;
-
-    for (int x = 0; x < width; x += 4)
-        Vec4f(fltLowest).stream(blur + x);
 }
 
 template<typename T> void outputGB_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 
 template<>
-void outputGB_SSE2(const float * blur, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+void outputGB_SSE2(const float * blur, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                    const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
@@ -204,13 +200,13 @@ void outputGB_SSE2(const float * blur, uint8_t * dstp, const unsigned width, con
             srcp.stream(dstp + x);
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
 
 template<>
-void outputGB_SSE2(const float * blur, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+void outputGB_SSE2(const float * blur, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                    const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
@@ -220,13 +216,13 @@ void outputGB_SSE2(const float * blur, uint16_t * dstp, const unsigned width, co
             min(srcp, peak).stream(dstp + x);
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
 
 template<>
-void outputGB_SSE2(const float * blur, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+void outputGB_SSE2(const float * blur, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                    const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
@@ -234,7 +230,7 @@ void outputGB_SSE2(const float * blur, float * dstp, const unsigned width, const
             min(srcp - offset, upper).stream(dstp + x);
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
@@ -242,7 +238,7 @@ void outputGB_SSE2(const float * blur, float * dstp, const unsigned width, const
 template<typename T> void binarizeCE_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 
 template<>
-void binarizeCE_SSE2(const float * blur, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+void binarizeCE_SSE2(const float * blur, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                      const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
@@ -256,13 +252,13 @@ void binarizeCE_SSE2(const float * blur, uint8_t * dstp, const unsigned width, c
             select(mask, Vec16uc(255), Vec16uc(0)).stream(dstp + x);
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
 
 template<>
-void binarizeCE_SSE2(const float * blur, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+void binarizeCE_SSE2(const float * blur, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                      const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
@@ -272,13 +268,13 @@ void binarizeCE_SSE2(const float * blur, uint16_t * dstp, const unsigned width, 
             select(mask, Vec8us(peak), Vec8us(0)).stream(dstp + x);
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
 
 template<>
-void binarizeCE_SSE2(const float * blur, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+void binarizeCE_SSE2(const float * blur, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                      const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
@@ -286,16 +282,16 @@ void binarizeCE_SSE2(const float * blur, float * dstp, const unsigned width, con
             select(mask, Vec4f(upper), Vec4f(lower)).stream(dstp + x);
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
 
-template<typename T> void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
+template<typename T> void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
 
 template<>
-void discretizeGM_SSE2(const float * gradient, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const float magnitude,
-                       const uint16_t peak, const float offset, const float upper) noexcept {
+void discretizeGM_SSE2(const float * gradient, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
+                       const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
             const Vec4f srcp_4f_0 = Vec4f().load_a(gradient + x);
@@ -312,14 +308,14 @@ void discretizeGM_SSE2(const float * gradient, uint8_t * dstp, const unsigned wi
             srcp.stream(dstp + x);
         }
 
-        gradient += stride;
+        gradient += bgStride;
         dstp += stride;
     }
 }
 
 template<>
-void discretizeGM_SSE2(const float * gradient, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const float magnitude,
-                       const uint16_t peak, const float offset, const float upper) noexcept {
+void discretizeGM_SSE2(const float * gradient, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
+                       const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
             const Vec4f srcp_4f_0 = Vec4f().load_a(gradient + x);
@@ -330,21 +326,21 @@ void discretizeGM_SSE2(const float * gradient, uint16_t * dstp, const unsigned w
             min(srcp, peak).stream(dstp + x);
         }
 
-        gradient += stride;
+        gradient += bgStride;
         dstp += stride;
     }
 }
 
 template<>
-void discretizeGM_SSE2(const float * gradient, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const float magnitude,
-                       const uint16_t peak, const float offset, const float upper) noexcept {
+void discretizeGM_SSE2(const float * gradient, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
+                       const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
             const Vec4f srcp = Vec4f().load_a(gradient + x);
             min(mul_sub(srcp, magnitude, offset), upper).stream(dstp + x);
         }
 
-        gradient += stride;
+        gradient += bgStride;
         dstp += stride;
     }
 }

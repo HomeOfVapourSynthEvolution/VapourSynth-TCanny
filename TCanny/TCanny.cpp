@@ -20,7 +20,6 @@
 **   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
-#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -45,9 +44,9 @@ extern void detectEdge_SSE2(float *, float *, float *, const int, const unsigned
 extern void detectEdge_AVX(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned) noexcept;
 extern void detectEdge_AVX2(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned) noexcept;
 
-extern void nonMaximumSuppression_SSE2(const float *, const float *, float *, const int, const unsigned, const int, const unsigned) noexcept;
-extern void nonMaximumSuppression_AVX(const float *, const float *, float *, const int, const unsigned, const int, const unsigned) noexcept;
-extern void nonMaximumSuppression_AVX2(const float *, const float *, float *, const int, const unsigned, const int, const unsigned) noexcept;
+extern void nonMaximumSuppression_SSE2(const float *, float *, float *, const int, const unsigned, const unsigned, const int) noexcept;
+extern void nonMaximumSuppression_AVX(const float *, float *, float *, const int, const unsigned, const unsigned, const int) noexcept;
+extern void nonMaximumSuppression_AVX2(const float *, float *, float *, const int, const unsigned, const unsigned, const int) noexcept;
 
 template<typename T> extern void outputGB_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 template<typename T> extern void outputGB_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
@@ -57,18 +56,18 @@ template<typename T> extern void binarizeCE_SSE2(const float *, T *, const unsig
 template<typename T> extern void binarizeCE_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 template<typename T> extern void binarizeCE_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 
-template<typename T> extern void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
-template<typename T> extern void discretizeGM_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
-template<typename T> extern void discretizeGM_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
+template<typename T> extern void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
+template<typename T> extern void discretizeGM_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
+template<typename T> extern void discretizeGM_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
 #endif
 
 template<typename T> static void (*copyData)(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) = nullptr;
 template<typename T> static void (*gaussianBlurVertical)(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) = nullptr;
 static void (*detectEdge)(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned) = nullptr;
-static void (*nonMaximumSuppression)(const float *, const float *, float *, const int, const unsigned, const int, const unsigned) = nullptr;
+static void (*nonMaximumSuppression)(const float *, float *, float *, const int, const unsigned, const unsigned, const int) = nullptr;
 template<typename T> static void (*outputGB)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) = nullptr;
 template<typename T> static void (*binarizeCE)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) = nullptr;
-template<typename T> static void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) = nullptr;
+template<typename T> static void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) = nullptr;
 
 static float * gaussianWeights(const float sigma, int * radius) noexcept {
     const unsigned diameter = std::max<unsigned>(sigma * 3.f + 0.5f, 1) * 2 + 1;
@@ -104,14 +103,14 @@ static inline T getBin(const float dir, const unsigned n) noexcept {
 
 template<typename T>
 static void copyData_C(const T * srcp, float * VS_RESTRICT blur, const unsigned width, const unsigned height,
-                       const unsigned stride, const unsigned blurStride, const float offset) noexcept {
+                       const unsigned stride, const unsigned bgStride, const float offset) noexcept {
     if (std::is_integral<T>::value) {
         for (unsigned y = 0; y < height; y++) {
             for (unsigned x = 0; x < width; x++)
                 blur[x] = srcp[x];
 
             srcp += stride;
-            blur += blurStride;
+            blur += bgStride;
         }
     } else {
         if (offset) {
@@ -120,10 +119,10 @@ static void copyData_C(const T * srcp, float * VS_RESTRICT blur, const unsigned 
                     blur[x] = srcp[x] + offset;
 
                 srcp += stride;
-                blur += blurStride;
+                blur += bgStride;
             }
         } else {
-            vs_bitblt(blur, blurStride * sizeof(float), srcp, stride * sizeof(float), width * sizeof(float), height);
+            vs_bitblt(blur, bgStride * sizeof(float), srcp, stride * sizeof(float), width * sizeof(float), height);
         }
     }
 }
@@ -146,7 +145,7 @@ static inline void gaussianBlurHorizontal_C(float * VS_RESTRICT buffer, float * 
 
 template<typename T>
 static void gaussianBlurVertical_C(const T * _srcp, float * VS_RESTRICT buffer, float * VS_RESTRICT blur, const float * weightsHorizontal, const float * weightsVertical,
-                                   const unsigned width, const int height, const unsigned stride, const unsigned blurStride,
+                                   const unsigned width, const int height, const unsigned stride, const unsigned bgStride,
                                    const int radiusHorizontal, const int radiusVertical, const float offset) noexcept {
     const unsigned diameter = radiusVertical * 2 + 1;
     const T ** srcp = new const T *[diameter];
@@ -179,17 +178,17 @@ static void gaussianBlurVertical_C(const T * _srcp, float * VS_RESTRICT buffer, 
             srcp[diameter - 1] += stride;
         else if (y > height - 1 - radiusVertical)
             srcp[diameter - 1] -= stride;
-        blur += blurStride;
+        blur += bgStride;
     }
 
     delete[] srcp;
 }
 
 static void detectEdge_C(float * blur, float * VS_RESTRICT gradient, float * VS_RESTRICT direction, const int width, const unsigned height,
-                         const unsigned stride, const unsigned blurStride, const int mode, const unsigned op) noexcept {
+                         const unsigned stride, const unsigned bgStride, const int mode, const unsigned op) noexcept {
     float * VS_RESTRICT srcpp = blur;
     float * VS_RESTRICT srcp = blur;
-    float * VS_RESTRICT srcpn = blur + blurStride;
+    float * VS_RESTRICT srcpn = blur + bgStride;
 
     srcp[-1] = srcp[0];
     srcp[width] = srcp[width - 1];
@@ -226,45 +225,46 @@ static void detectEdge_C(float * blur, float * VS_RESTRICT gradient, float * VS_
         srcpp = srcp;
         srcp = srcpn;
         if (y < height - 2)
-            srcpn += blurStride;
-        gradient += stride;
+            srcpn += bgStride;
+        gradient += bgStride;
         direction += stride;
     }
 }
 
-static void nonMaximumSuppression_C(const float * gradient, const float * direction, float * VS_RESTRICT blur, const int width, const unsigned height,
-                                    const int stride, const unsigned blurStride) noexcept {
-    const int offsets[]{ 1, -stride + 1, -stride, -stride - 1 };
+static void nonMaximumSuppression_C(const float * direction, float * VS_RESTRICT gradient, float * VS_RESTRICT blur, const int width, const unsigned height,
+                                    const unsigned stride, const int bgStride) noexcept {
+    const int offsets[]{ 1, -bgStride + 1, -bgStride, -bgStride - 1 };
 
-    std::fill_n(blur, width, fltLowest);
+    gradient[-1] = gradient[0];
+    gradient[-1 + bgStride * (height - 1)] = gradient[bgStride * (height - 1)];
+    gradient[width] = gradient[width - 1];
+    gradient[width + bgStride * (height - 1)] = gradient[width - 1 + bgStride * (height - 1)];
+    std::copy_n(gradient - 8, width + 16, gradient - 8 - bgStride);
+    std::copy_n(gradient - 8 + bgStride * (height - 1), width + 16, gradient - 8 + bgStride * height);
 
-    for (unsigned y = 1; y < height - 1; y++) {
-        gradient += stride;
-        direction += stride;
-        blur += blurStride;
-
-        for (int x = 1; x < width - 1; x++) {
+    for (unsigned y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
             const int offset = offsets[getBin<unsigned>(direction[x], 4)];
             blur[x] = (gradient[x] >= std::max(gradient[x + offset], gradient[x - offset])) ? gradient[x] : fltLowest;
         }
 
-        blur[0] = blur[width - 1] = fltLowest;
+        direction += stride;
+        gradient += bgStride;
+        blur += bgStride;
     }
-
-    std::fill_n(blur + blurStride, width, fltLowest);
 }
 
-static void hysteresis(float * VS_RESTRICT blur, bool * VS_RESTRICT label, const unsigned width, const unsigned height, const unsigned blurStride,
+static void hysteresis(float * VS_RESTRICT blur, bool * VS_RESTRICT label, const int width, const int height, const unsigned bgStride,
                        const float t_h, const float t_l) noexcept {
     std::fill_n(label, width * height, false);
 
-    std::vector<std::pair<unsigned, unsigned>> coordinates;
+    std::vector<std::pair<int, int>> coordinates;
 
-    for (unsigned y = 1; y < height - 1; y++) {
-        for (unsigned x = 1; x < width - 1; x++) {
-            if (!label[width * y + x] && blur[blurStride * y + x] >= t_h) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            if (!label[width * y + x] && blur[bgStride * y + x] >= t_h) {
                 label[width * y + x] = true;
-                blur[blurStride * y + x] = fltMax;
+                blur[bgStride * y + x] = fltMax;
 
                 coordinates.emplace_back(std::make_pair(x, y));
 
@@ -272,11 +272,14 @@ static void hysteresis(float * VS_RESTRICT blur, bool * VS_RESTRICT label, const
                     const auto pos = coordinates.back();
                     coordinates.pop_back();
 
-                    for (unsigned yy = pos.second - 1; yy <= pos.second + 1; yy++) {
-                        for (unsigned xx = pos.first - 1; xx <= pos.first + 1; xx++) {
-                            if (!label[width * yy + xx] && blur[blurStride * yy + xx] >= t_l) {
+                    const int yyStart = std::max(pos.second - 1, 0), yyStop = std::min(pos.second + 1, height - 1);
+                    const int xxStart = std::max(pos.first - 1, 0), xxStop = std::min(pos.first + 1, width - 1);
+
+                    for (int yy = yyStart; yy <= yyStop; yy++) {
+                        for (int xx = xxStart; xx <= xxStop; xx++) {
+                            if (!label[width * yy + xx] && blur[bgStride * yy + xx] >= t_l) {
                                 label[width * yy + xx] = true;
-                                blur[blurStride * yy + xx] = fltMax;
+                                blur[bgStride * yy + xx] = fltMax;
 
                                 coordinates.emplace_back(std::make_pair(xx, yy));
                             }
@@ -289,7 +292,7 @@ static void hysteresis(float * VS_RESTRICT blur, bool * VS_RESTRICT label, const
 }
 
 template<typename T>
-static void outputGB_C(const float * blur, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+static void outputGB_C(const float * blur, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                        const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
@@ -299,13 +302,13 @@ static void outputGB_C(const float * blur, T * VS_RESTRICT dstp, const unsigned 
                 dstp[x] = std::min(blur[x] - offset, upper);
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void binarizeCE_C(const float * blur, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride,
+static void binarizeCE_C(const float * blur, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
                          const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
@@ -315,14 +318,14 @@ static void binarizeCE_C(const float * blur, T * VS_RESTRICT dstp, const unsigne
                 dstp[x] = (blur[x] == fltMax) ? upper : lower;
         }
 
-        blur += blurStride;
+        blur += bgStride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void discretizeGM_C(const float * gradient, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const float magnitude,
-                           const uint16_t peak, const float offset, const float upper) noexcept {
+static void discretizeGM_C(const float * gradient, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
+                           const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
             if (std::is_integral<T>::value)
@@ -331,14 +334,14 @@ static void discretizeGM_C(const float * gradient, T * VS_RESTRICT dstp, const u
                 dstp[x] = std::min(gradient[x] * magnitude - offset, upper);
         }
 
-        gradient += stride;
+        gradient += bgStride;
         dstp += stride;
     }
 }
 
 template<typename T>
-static void discretizeDM_T(const float * blur, const float * direction, T * VS_RESTRICT dstp, const unsigned width, const unsigned height,
-                           const unsigned stride, const unsigned blurStride, const unsigned bins, const float offset, const float lower) noexcept {
+static void discretizeDM_T(const float * blur, const float * direction, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
+                           const unsigned bins, const float offset, const float lower) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
             if (std::is_integral<T>::value)
@@ -347,7 +350,7 @@ static void discretizeDM_T(const float * blur, const float * direction, T * VS_R
                 dstp[x] = (blur[x] == fltMax) ? getBin<float>(direction[x], bins) - offset : lower;
         }
 
-        blur += blurStride;
+        blur += bgStride;
         direction += stride;
         dstp += stride;
     }
@@ -376,39 +379,39 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData *
             const unsigned width = vsapi->getFrameWidth(src, plane);
             const unsigned height = vsapi->getFrameHeight(src, plane);
             const unsigned stride = vsapi->getStride(src, plane) / sizeof(T);
-            const unsigned blurStride = stride + 16;
+            const unsigned bgStride = stride + 16;
             const T * srcp = reinterpret_cast<const T *>(vsapi->getReadPtr(src, plane));
             T * dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
 
             const auto threadId = std::this_thread::get_id();
             float * buffer = d->buffer.at(threadId) + d->radiusAlign;
             float * blur = d->blur.at(threadId) + 8;
-            float * gradient = d->gradient.at(threadId);
+            float * gradient = d->gradient.at(threadId) + bgStride + 8;
             float * direction = d->direction.at(threadId);
             bool * label = d->label.at(threadId);
 
             if (d->radiusHorizontal[plane])
-                gaussianBlurVertical<T>(srcp, buffer, blur, d->weightsHorizontal[plane], d->weightsVertical[plane], width, height, stride, blurStride,
+                gaussianBlurVertical<T>(srcp, buffer, blur, d->weightsHorizontal[plane], d->weightsVertical[plane], width, height, stride, bgStride,
                                         d->radiusHorizontal[plane], d->radiusVertical[plane], d->offset[plane]);
             else
-                copyData<T>(srcp, blur, width, height, stride, blurStride, d->offset[plane]);
+                copyData<T>(srcp, blur, width, height, stride, bgStride, d->offset[plane]);
 
             if (d->mode != -1)
-                detectEdge(blur, gradient, direction, width, height, stride, blurStride, d->mode, d->op);
+                detectEdge(blur, gradient, direction, width, height, stride, bgStride, d->mode, d->op);
 
             if (!(d->mode & 1)) {
-                nonMaximumSuppression(gradient, direction, blur, width, height, stride, blurStride);
-                hysteresis(blur, label, width, height, blurStride, d->t_h, d->t_l);
+                nonMaximumSuppression(direction, gradient, blur, width, height, stride, bgStride);
+                hysteresis(blur, label, width, height, bgStride, d->t_h, d->t_l);
             }
 
             if (d->mode == -1)
-                outputGB<T>(blur, dstp, width, height, stride, blurStride, d->peak, d->offset[plane], d->upper[plane]);
+                outputGB<T>(blur, dstp, width, height, stride, bgStride, d->peak, d->offset[plane], d->upper[plane]);
             else if (d->mode == 0)
-                binarizeCE<T>(blur, dstp, width, height, stride, blurStride, d->peak, d->lower[plane], d->upper[plane]);
+                binarizeCE<T>(blur, dstp, width, height, stride, bgStride, d->peak, d->lower[plane], d->upper[plane]);
             else if (d->mode == 1)
-                discretizeGM<T>(gradient, dstp, width, height, stride, d->magnitude, d->peak, d->offset[plane], d->upper[plane]);
+                discretizeGM<T>(gradient, dstp, width, height, stride, bgStride, d->magnitude, d->peak, d->offset[plane], d->upper[plane]);
             else if (d->mode == 2)
-                discretizeDM_T(blur, direction, dstp, width, height, stride, blurStride, d->bins, d->offset[plane], d->lower[plane]);
+                discretizeDM_T(blur, direction, dstp, width, height, stride, bgStride, d->bins, d->offset[plane], d->lower[plane]);
             else
                 discretizeDM(direction, dstp, width, height, stride, d->bins, d->offset[plane]);
         }
@@ -557,7 +560,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
             if (!d->gradient.count(threadId)) {
                 if (d->mode != -1) {
-                    float * gradient = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
+                    float * gradient = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + 16) * (d->vi->height + 2) * sizeof(float), 32);
                     if (!gradient)
                         throw std::string{ "malloc failure (gradient)" };
                     d->gradient.emplace(threadId, gradient);
@@ -568,7 +571,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 
             if (!d->direction.count(threadId)) {
                 if (d->mode != -1 && d->mode != 1) {
-                    float * direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * (d->vi->height + 1) * sizeof(float), 32);
+                    float * direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
                     if (!direction)
                         throw std::string{ "malloc failure (direction)" };
                     d->direction.emplace(threadId, direction);
