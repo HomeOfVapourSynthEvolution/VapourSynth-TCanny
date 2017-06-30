@@ -91,6 +91,9 @@
     <ClCompile Include="TCanny_SSE2.cpp" />
     <ClCompile Include="vectorclass\instrset_detect.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="TCanny.hpp" />
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

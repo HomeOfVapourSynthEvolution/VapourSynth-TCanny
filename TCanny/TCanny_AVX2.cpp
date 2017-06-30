@@ -3,13 +3,7 @@
 #define __AVX2__
 #endif
 
-#include <limits>
-#include <type_traits>
-
-#include "vectorclass/vectormath_trig.h"
-
-static constexpr float M_PIF = 3.14159265358979323846f;
-static constexpr float M_1_PIF = 0.318309886183790671538f;
+#include "TCanny.hpp"
 
 template<typename T>
 void copyData_AVX2(const T * srcp, float * blur, const unsigned width, const unsigned height, const unsigned stride, const unsigned blurStride, const float offset) noexcept {
@@ -34,7 +28,7 @@ template void copyData_AVX2(const float *, float *, const unsigned, const unsign
 
 static inline void gaussianBlurHorizontal_AVX2(float * buffer, float * blur, const float * weights, const int width, const int radius) noexcept {
     for (int i = 1; i <= radius; i++) {
-        buffer[-i] = buffer[i - 1];
+        buffer[-i] = buffer[-1 + i];
         buffer[width - 1 + i] = buffer[width - i];
     }
 
@@ -59,7 +53,7 @@ void gaussianBlurVertical_AVX2(const T * __srcp, float * buffer, float * blur, c
 
     _srcp[radiusVertical] = __srcp;
     for (int i = 1; i <= radiusVertical; i++) {
-        _srcp[radiusVertical - i] = _srcp[radiusVertical + i - 1];
+        _srcp[radiusVertical - i] = _srcp[radiusVertical - 1 + i];
         _srcp[radiusVertical + i] = _srcp[radiusVertical] + stride * i;
     }
 
@@ -157,7 +151,7 @@ void detectEdge_AVX2(float * blur, float * gradient, float * direction, const in
 void nonMaximumSuppression_AVX2(const float * _gradient, const float * _direction, float * blur, const int width, const unsigned height,
                                 const int stride, const unsigned blurStride) noexcept {
     for (int x = 0; x < width; x += 8)
-        Vec8f(std::numeric_limits<float>::lowest()).stream(blur + x);
+        Vec8f(fltLowest).stream(blur + x);
 
     for (unsigned y = 1; y < height - 1; y++) {
         _gradient += stride;
@@ -185,16 +179,16 @@ void nonMaximumSuppression_AVX2(const float * _gradient, const float * _directio
             result |= gradient & mask;
 
             gradient = Vec8f().load(_gradient + x);
-            select(gradient >= result, gradient, std::numeric_limits<float>::lowest()).store(blur + x);
+            select(gradient >= result, gradient, fltLowest).store(blur + x);
         }
 
-        blur[0] = blur[width - 1] = std::numeric_limits<float>::lowest();
+        blur[0] = blur[width - 1] = fltLowest;
     }
 
     blur += blurStride;
 
     for (int x = 0; x < width; x += 8)
-        Vec8f(std::numeric_limits<float>::lowest()).stream(blur + x);
+        Vec8f(fltLowest).stream(blur + x);
 }
 
 template<typename T> void outputGB_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
@@ -256,10 +250,10 @@ void binarizeCE_AVX2(const float * blur, uint8_t * dstp, const unsigned width, c
                      const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 32) {
-            const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == std::numeric_limits<float>::max());
-            const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == std::numeric_limits<float>::max());
-            const Vec8ib mask_8ib_2 = Vec8ib(Vec8f().load_a(blur + x + 16) == std::numeric_limits<float>::max());
-            const Vec8ib mask_8ib_3 = Vec8ib(Vec8f().load_a(blur + x + 24) == std::numeric_limits<float>::max());
+            const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == fltMax);
+            const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == fltMax);
+            const Vec8ib mask_8ib_2 = Vec8ib(Vec8f().load_a(blur + x + 16) == fltMax);
+            const Vec8ib mask_8ib_3 = Vec8ib(Vec8f().load_a(blur + x + 24) == fltMax);
             const Vec16sb mask_16sb_0 = Vec16sb(compress_saturated(mask_8ib_0, mask_8ib_1));
             const Vec16sb mask_16sb_1 = Vec16sb(compress_saturated(mask_8ib_2, mask_8ib_3));
             const Vec32cb mask = Vec32cb(compress_saturated(mask_16sb_0, mask_16sb_1));
@@ -276,8 +270,8 @@ void binarizeCE_AVX2(const float * blur, uint16_t * dstp, const unsigned width, 
                      const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
-            const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == std::numeric_limits<float>::max());
-            const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == std::numeric_limits<float>::max());
+            const Vec8ib mask_8ib_0 = Vec8ib(Vec8f().load_a(blur + x) == fltMax);
+            const Vec8ib mask_8ib_1 = Vec8ib(Vec8f().load_a(blur + x + 8) == fltMax);
             const Vec16sb mask = Vec16sb(compress_saturated(mask_8ib_0, mask_8ib_1));
             select(mask, Vec16us(peak), Vec16us(0)).stream(dstp + x);
         }
@@ -292,7 +286,7 @@ void binarizeCE_AVX2(const float * blur, float * dstp, const unsigned width, con
                      const uint16_t peak, const float lower, const float upper) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
-            const Vec8fb mask = Vec8f().load_a(blur + x) == std::numeric_limits<float>::max();
+            const Vec8fb mask = Vec8f().load_a(blur + x) == fltMax;
             select(mask, Vec8f(upper), Vec8f(lower)).stream(dstp + x);
         }
 
