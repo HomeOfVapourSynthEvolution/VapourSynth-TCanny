@@ -187,11 +187,11 @@ void nonMaximumSuppression_AVX(const float * _direction, float * _gradient, floa
     }
 }
 
-template<typename T> void outputGB_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
+template<typename T> void outputGB_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float) noexcept;
 
 template<>
 void outputGB_AVX(const float * blur, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                  const uint16_t peak, const float offset, const float upper) noexcept {
+                  const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
             const Vec8i srcp_8i_0 = truncate_to_int(Vec8f().load_a(blur + x) + 0.5f);
@@ -209,7 +209,7 @@ void outputGB_AVX(const float * blur, uint8_t * dstp, const unsigned width, cons
 
 template<>
 void outputGB_AVX(const float * blur, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                  const uint16_t peak, const float offset, const float upper) noexcept {
+                  const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
             const Vec8i srcp_8i = truncate_to_int(Vec8f().load_a(blur + x) + 0.5f);
@@ -224,11 +224,11 @@ void outputGB_AVX(const float * blur, uint16_t * dstp, const unsigned width, con
 
 template<>
 void outputGB_AVX(const float * blur, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                  const uint16_t peak, const float offset, const float upper) noexcept {
+                  const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
             const Vec8f srcp = Vec8f().load_a(blur + x);
-            min(srcp - offset, upper).stream(dstp + x);
+            (srcp - offset).stream(dstp + x);
         }
 
         blur += bgStride;
@@ -285,11 +285,11 @@ void binarizeCE_AVX(const float * blur, float * dstp, const unsigned width, cons
     }
 }
 
-template<typename T> void discretizeGM_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
+template<typename T> void discretizeGM_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float) noexcept;
 
 template<>
 void discretizeGM_AVX(const float * gradient, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                      const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
+                      const float magnitude, const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
             const Vec8f srcp_8f_0 = Vec8f().load_a(gradient + x);
@@ -309,7 +309,7 @@ void discretizeGM_AVX(const float * gradient, uint8_t * dstp, const unsigned wid
 
 template<>
 void discretizeGM_AVX(const float * gradient, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                      const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
+                      const float magnitude, const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
             const Vec8f srcp_8f = Vec8f().load_a(gradient + x);
@@ -325,11 +325,11 @@ void discretizeGM_AVX(const float * gradient, uint16_t * dstp, const unsigned wi
 
 template<>
 void discretizeGM_AVX(const float * gradient, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                      const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
+                      const float magnitude, const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
             const Vec8f srcp = Vec8f().load_a(gradient + x);
-            min(mul_sub(srcp, magnitude, offset), upper).stream(dstp + x);
+            mul_sub(srcp, magnitude, offset).stream(dstp + x);
         }
 
         gradient += bgStride;

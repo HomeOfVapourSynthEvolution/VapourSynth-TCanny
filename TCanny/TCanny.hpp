@@ -1,10 +1,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
-#include <thread>
+#include <memory>
+#include <string>
 #include <type_traits>
-#include <unordered_map>
 
 #include <VapourSynth.h>
 #include <VSHelper.h>
@@ -18,18 +19,23 @@ static constexpr float M_1_PIF = 0.318309886183790671538f;
 static constexpr float fltMax = std::numeric_limits<float>::max();
 static constexpr float fltLowest = std::numeric_limits<float>::lowest();
 
-struct TCannyData {
-    VSNodeRef * node;
-    const VSVideoInfo * vi;
-    float t_h, t_l;
-    int mode, op;
-    bool process[3];
-    float * weightsHorizontal[3], * weightsVertical[3];
-    int radiusHorizontal[3], radiusVertical[3];
-    float magnitude;
-    unsigned radiusAlign, bins;
-    uint16_t peak;
-    float offset[3], lower[3], upper[3];
-    std::unordered_map<std::thread::id, float *> buffer, blur, gradient, direction;
-    std::unordered_map<std::thread::id, bool *> label;
-};
+static float * gaussianWeights(const float sigma, int * radius) noexcept {
+    const unsigned diameter = std::max<unsigned>(sigma * 3.f + 0.5f, 1) * 2 + 1;
+    *radius = diameter / 2;
+    float sum = 0.f;
+
+    float * VS_RESTRICT weights = new (std::nothrow) float[diameter];
+    if (!weights)
+        return nullptr;
+
+    for (int k = -(*radius); k <= *radius; k++) {
+        const float w = std::exp(-(k * k) / (2.f * sigma * sigma));
+        weights[k + *radius] = w;
+        sum += w;
+    }
+
+    for (unsigned k = 0; k < diameter; k++)
+        weights[k] /= sum;
+
+    return weights;
+}

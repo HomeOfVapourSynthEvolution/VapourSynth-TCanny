@@ -183,11 +183,11 @@ void nonMaximumSuppression_SSE2(const float * _direction, float * _gradient, flo
     }
 }
 
-template<typename T> void outputGB_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
+template<typename T> void outputGB_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float) noexcept;
 
 template<>
 void outputGB_SSE2(const float * blur, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                   const uint16_t peak, const float offset, const float upper) noexcept {
+                   const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
             const Vec4i srcp_4i_0 = truncate_to_int(Vec4f().load_a(blur + x) + 0.5f);
@@ -207,7 +207,7 @@ void outputGB_SSE2(const float * blur, uint8_t * dstp, const unsigned width, con
 
 template<>
 void outputGB_SSE2(const float * blur, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                   const uint16_t peak, const float offset, const float upper) noexcept {
+                   const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
             const Vec4i srcp_4i_0 = truncate_to_int(Vec4f().load_a(blur + x) + 0.5f);
@@ -223,11 +223,11 @@ void outputGB_SSE2(const float * blur, uint16_t * dstp, const unsigned width, co
 
 template<>
 void outputGB_SSE2(const float * blur, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                   const uint16_t peak, const float offset, const float upper) noexcept {
+                   const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
             const Vec4f srcp = Vec4f().load_a(blur + x);
-            min(srcp - offset, upper).stream(dstp + x);
+            (srcp - offset).stream(dstp + x);
         }
 
         blur += bgStride;
@@ -287,11 +287,11 @@ void binarizeCE_SSE2(const float * blur, float * dstp, const unsigned width, con
     }
 }
 
-template<typename T> void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
+template<typename T> void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float) noexcept;
 
 template<>
 void discretizeGM_SSE2(const float * gradient, uint8_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                       const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
+                       const float magnitude, const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 16) {
             const Vec4f srcp_4f_0 = Vec4f().load_a(gradient + x);
@@ -315,7 +315,7 @@ void discretizeGM_SSE2(const float * gradient, uint8_t * dstp, const unsigned wi
 
 template<>
 void discretizeGM_SSE2(const float * gradient, uint16_t * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                       const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
+                       const float magnitude, const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 8) {
             const Vec4f srcp_4f_0 = Vec4f().load_a(gradient + x);
@@ -333,11 +333,11 @@ void discretizeGM_SSE2(const float * gradient, uint16_t * dstp, const unsigned w
 
 template<>
 void discretizeGM_SSE2(const float * gradient, float * dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                       const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
+                       const float magnitude, const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x += 4) {
             const Vec4f srcp = Vec4f().load_a(gradient + x);
-            min(mul_sub(srcp, magnitude, offset), upper).stream(dstp + x);
+            mul_sub(srcp, magnitude, offset).stream(dstp + x);
         }
 
         gradient += bgStride;

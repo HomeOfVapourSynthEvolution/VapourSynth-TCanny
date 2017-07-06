@@ -20,9 +20,8 @@
 **   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
-#include <cmath>
-#include <memory>
-#include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "TCanny.hpp"
@@ -48,47 +47,42 @@ extern void nonMaximumSuppression_SSE2(const float *, float *, float *, const in
 extern void nonMaximumSuppression_AVX(const float *, float *, float *, const int, const unsigned, const unsigned, const int) noexcept;
 extern void nonMaximumSuppression_AVX2(const float *, float *, float *, const int, const unsigned, const unsigned, const int) noexcept;
 
-template<typename T> extern void outputGB_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
-template<typename T> extern void outputGB_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
-template<typename T> extern void outputGB_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
+template<typename T> extern void outputGB_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float) noexcept;
+template<typename T> extern void outputGB_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float) noexcept;
+template<typename T> extern void outputGB_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float) noexcept;
 
 template<typename T> extern void binarizeCE_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 template<typename T> extern void binarizeCE_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 template<typename T> extern void binarizeCE_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) noexcept;
 
-template<typename T> extern void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
-template<typename T> extern void discretizeGM_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
-template<typename T> extern void discretizeGM_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) noexcept;
+template<typename T> extern void discretizeGM_SSE2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float) noexcept;
+template<typename T> extern void discretizeGM_AVX(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float) noexcept;
+template<typename T> extern void discretizeGM_AVX2(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float) noexcept;
 #endif
 
 template<typename T> static void (*copyData)(const T *, float *, const unsigned, const unsigned, const unsigned, const unsigned, const float) = nullptr;
 template<typename T> static void (*gaussianBlurVertical)(const T *, float *, float *, const float *, const float *, const unsigned, const int, const unsigned, const unsigned, const int, const int, const float) = nullptr;
 static void (*detectEdge)(float *, float *, float *, const int, const unsigned, const unsigned, const unsigned, const int, const unsigned) = nullptr;
 static void (*nonMaximumSuppression)(const float *, float *, float *, const int, const unsigned, const unsigned, const int) = nullptr;
-template<typename T> static void (*outputGB)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) = nullptr;
+template<typename T> static void (*outputGB)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float) = nullptr;
 template<typename T> static void (*binarizeCE)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const uint16_t, const float, const float) = nullptr;
-template<typename T> static void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float, const float) = nullptr;
+template<typename T> static void (*discretizeGM)(const float *, T *, const unsigned, const unsigned, const unsigned, const unsigned, const float, const uint16_t, const float) = nullptr;
 
-static float * gaussianWeights(const float sigma, int * radius) noexcept {
-    const unsigned diameter = std::max<unsigned>(sigma * 3.f + 0.5f, 1) * 2 + 1;
-    *radius = diameter / 2;
-    float sum = 0.f;
-
-    float * VS_RESTRICT weights = new (std::nothrow) float[diameter];
-    if (!weights)
-        return nullptr;
-
-    for (int k = -(*radius); k <= *radius; k++) {
-        const float w = std::exp(-(k * k) / (2.f * sigma * sigma));
-        weights[k + *radius] = w;
-        sum += w;
-    }
-
-    for (unsigned k = 0; k < diameter; k++)
-        weights[k] /= sum;
-
-    return weights;
-}
+struct TCannyData {
+    VSNodeRef * node;
+    const VSVideoInfo * vi;
+    float t_h, t_l;
+    int mode, op;
+    bool process[3];
+    float * weightsHorizontal[3], * weightsVertical[3];
+    int radiusHorizontal[3], radiusVertical[3];
+    float magnitude;
+    unsigned radiusAlign, bins;
+    uint16_t peak;
+    float offset[3], lower[3], upper[3];
+    std::unordered_map<std::thread::id, float *> buffer, blur, gradient, direction;
+    std::unordered_map<std::thread::id, bool *> label;
+};
 
 template<typename T>
 static inline T getBin(const float dir, const unsigned n) noexcept {
@@ -293,13 +287,13 @@ static void hysteresis(float * VS_RESTRICT blur, bool * VS_RESTRICT label, const
 
 template<typename T>
 static void outputGB_C(const float * blur, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                       const uint16_t peak, const float offset, const float upper) noexcept {
+                       const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
             if (std::is_integral<T>::value)
                 dstp[x] = std::min<unsigned>(blur[x] + 0.5f, peak);
             else
-                dstp[x] = std::min(blur[x] - offset, upper);
+                dstp[x] = blur[x] - offset;
         }
 
         blur += bgStride;
@@ -325,13 +319,13 @@ static void binarizeCE_C(const float * blur, T * VS_RESTRICT dstp, const unsigne
 
 template<typename T>
 static void discretizeGM_C(const float * gradient, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                           const float magnitude, const uint16_t peak, const float offset, const float upper) noexcept {
+                           const float magnitude, const uint16_t peak, const float offset) noexcept {
     for (unsigned y = 0; y < height; y++) {
         for (unsigned x = 0; x < width; x++) {
             if (std::is_integral<T>::value)
                 dstp[x] = std::min<unsigned>(gradient[x] * magnitude + 0.5f, peak);
             else
-                dstp[x] = std::min(gradient[x] * magnitude - offset, upper);
+                dstp[x] = gradient[x] * magnitude - offset;
         }
 
         gradient += bgStride;
@@ -373,11 +367,11 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData *
             }
 
             if (d->mode == -1)
-                outputGB<T>(blur, dstp, width, height, stride, bgStride, d->peak, d->offset[plane], d->upper[plane]);
+                outputGB<T>(blur, dstp, width, height, stride, bgStride, d->peak, d->offset[plane]);
             else if (d->mode == 0)
                 binarizeCE<T>(blur, dstp, width, height, stride, bgStride, d->peak, d->lower[plane], d->upper[plane]);
             else
-                discretizeGM<T>(gradient, dstp, width, height, stride, bgStride, d->magnitude, d->peak, d->offset[plane], d->upper[plane]);
+                discretizeGM<T>(gradient, dstp, width, height, stride, bgStride, d->magnitude, d->peak, d->offset[plane]);
         }
     }
 }
