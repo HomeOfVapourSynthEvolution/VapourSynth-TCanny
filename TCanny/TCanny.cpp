@@ -216,7 +216,7 @@ static void detectEdge_C(float * blur, float * VS_RESTRICT gradient, float * VS_
 
             gradient[x] = std::sqrt(gx * gx + gy * gy);
 
-            if (mode != 1) {
+            if (mode == 0) {
                 const float dr = std::atan2(gy, gx);
                 direction[x] = (dr < 0.f) ? dr + M_PIF : dr;
             }
@@ -340,39 +340,6 @@ static void discretizeGM_C(const float * gradient, T * VS_RESTRICT dstp, const u
 }
 
 template<typename T>
-static void discretizeDM_T(const float * blur, const float * direction, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride, const unsigned bgStride,
-                           const unsigned bins, const float offset, const float lower) noexcept {
-    for (unsigned y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x++) {
-            if (std::is_integral<T>::value)
-                dstp[x] = (blur[x] == fltMax) ? getBin<T>(direction[x], bins) : 0;
-            else
-                dstp[x] = (blur[x] == fltMax) ? getBin<float>(direction[x], bins) - offset : lower;
-        }
-
-        blur += bgStride;
-        direction += stride;
-        dstp += stride;
-    }
-}
-
-template<typename T>
-static void discretizeDM(const float * direction, T * VS_RESTRICT dstp, const unsigned width, const unsigned height, const unsigned stride,
-                         const unsigned bins, const float offset) noexcept {
-    for (unsigned y = 0; y < height; y++) {
-        for (unsigned x = 0; x < width; x++) {
-            if (std::is_integral<T>::value)
-                dstp[x] = getBin<T>(direction[x], bins);
-            else
-                dstp[x] = getBin<float>(direction[x], bins) - offset;
-        }
-
-        direction += stride;
-        dstp += stride;
-    }
-}
-
-template<typename T>
 static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData * d, const VSAPI * vsapi) noexcept {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
@@ -396,24 +363,21 @@ static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData *
             else
                 copyData<T>(srcp, blur, width, height, stride, bgStride, d->offset[plane]);
 
-            if (d->mode != -1)
+            if (d->mode != -1) {
                 detectEdge(blur, gradient, direction, width, height, stride, bgStride, d->mode, d->op);
 
-            if (!(d->mode & 1)) {
-                nonMaximumSuppression(direction, gradient, blur, width, height, stride, bgStride);
-                hysteresis(blur, label, width, height, bgStride, d->t_h, d->t_l);
+                if (d->mode == 0) {
+                    nonMaximumSuppression(direction, gradient, blur, width, height, stride, bgStride);
+                    hysteresis(blur, label, width, height, bgStride, d->t_h, d->t_l);
+                }
             }
 
             if (d->mode == -1)
                 outputGB<T>(blur, dstp, width, height, stride, bgStride, d->peak, d->offset[plane], d->upper[plane]);
             else if (d->mode == 0)
                 binarizeCE<T>(blur, dstp, width, height, stride, bgStride, d->peak, d->lower[plane], d->upper[plane]);
-            else if (d->mode == 1)
-                discretizeGM<T>(gradient, dstp, width, height, stride, bgStride, d->magnitude, d->peak, d->offset[plane], d->upper[plane]);
-            else if (d->mode == 2)
-                discretizeDM_T(blur, direction, dstp, width, height, stride, bgStride, d->bins, d->offset[plane], d->lower[plane]);
             else
-                discretizeDM(direction, dstp, width, height, stride, d->bins, d->offset[plane]);
+                discretizeGM<T>(gradient, dstp, width, height, stride, bgStride, d->magnitude, d->peak, d->offset[plane], d->upper[plane]);
         }
     }
 }
@@ -570,7 +534,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
             }
 
             if (!d->direction.count(threadId)) {
-                if (d->mode != -1 && d->mode != 1) {
+                if (d->mode == 0) {
                     float * direction = vs_aligned_malloc<float>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(float), 32);
                     if (!direction)
                         throw std::string{ "malloc failure (direction)" };
@@ -581,7 +545,7 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
             }
 
             if (!d->label.count(threadId)) {
-                if (!(d->mode & 1)) {
+                if (d->mode == 0) {
                     bool * label = new (std::nothrow) bool[d->vi->width * d->vi->height];
                     if (!label)
                         throw std::string{ "malloc failure (label)" };
@@ -702,8 +666,8 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         if (d->t_l >= d->t_h)
             throw std::string{ "t_h must be greater than t_l" };
 
-        if (d->mode < -1 || d->mode > 3)
-            throw std::string{ "mode must be -1, 0, 1, 2 or 3" };
+        if (d->mode < -1 || d->mode > 1)
+            throw std::string{ "mode must be -1, 0 or 1" };
 
         if (d->op < 0 || d->op > 3)
             throw std::string{ "op must be 0, 1, 2 or 3" };
