@@ -96,7 +96,7 @@ template void gaussianBlurV_avx2(const uint8_t *, float *, float *, const float 
 template void gaussianBlurV_avx2(const uint16_t *, float *, float *, const float *, const float *, const int, const int, const int, const int, const int, const int, const float) noexcept;
 template void gaussianBlurV_avx2(const float *, float *, float *, const float *, const float *, const int, const int, const int, const int, const int, const int, const float) noexcept;
 
-void detectEdge_avx2(float * blur, float * gradient, float * direction, const int width, const int height, const int stride, const int bgStride,
+void detectEdge_avx2(float * blur, float * gradient, unsigned * direction, const int width, const int height, const int stride, const int bgStride,
                      const int mode, const unsigned op) noexcept {
     float * srcpp = blur;
     float * srcp = blur;
@@ -138,8 +138,11 @@ void detectEdge_avx2(float * blur, float * gradient, float * direction, const in
             sqrt(mul_add(gx, gx, gy * gy)).stream(gradient + x);
 
             if (mode == 0) {
-                const Vec8f dr = atan2(gy, gx);
-                if_add(dr < 0.f, dr, M_PIF).stream(direction + x);
+                Vec8f dr = atan2(gy, gx);
+                dr = if_add(dr < 0.f, dr, M_PIF);
+
+                const Vec8ui bin = Vec8ui(truncate_to_int(mul_add(dr, 4.f * M_1_PIF, 0.5f)));
+                select(bin >= 4, zero_256b(), bin).stream(direction + x);
             }
         }
 
@@ -152,7 +155,7 @@ void detectEdge_avx2(float * blur, float * gradient, float * direction, const in
     }
 }
 
-void nonMaximumSuppression_avx2(const float * _direction, float * _gradient, float * blur, const int width, const int height, const int stride, const int bgStride) noexcept {
+void nonMaximumSuppression_avx2(const unsigned * _direction, float * _gradient, float * blur, const int width, const int height, const int stride, const int bgStride) noexcept {
     _gradient[-1] = _gradient[0];
     _gradient[-1 + bgStride * (height - 1)] = _gradient[bgStride * (height - 1)];
     _gradient[width] = _gradient[width - 1];
@@ -162,22 +165,21 @@ void nonMaximumSuppression_avx2(const float * _direction, float * _gradient, flo
 
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
-            const Vec8f direction = Vec8f().load_a(_direction + x);
-            const Vec8i bin = truncate_to_int(mul_add(direction, 4.f * M_1_PIF, 0.5f));
+            const Vec8ui direction = Vec8ui().load_a(_direction + x);
 
-            Vec8fb mask = Vec8fb((bin == 0) | (bin >= 4));
+            Vec8fb mask = Vec8fb(direction == 0);
             Vec8f gradient = max(Vec8f().load(_gradient + x + 1), Vec8f().load(_gradient + x - 1));
             Vec8f result = gradient & mask;
 
-            mask = Vec8fb(bin == 1);
+            mask = Vec8fb(direction == 1);
             gradient = max(Vec8f().load(_gradient + x - bgStride + 1), Vec8f().load(_gradient + x + bgStride - 1));
             result |= gradient & mask;
 
-            mask = Vec8fb(bin == 2);
+            mask = Vec8fb(direction == 2);
             gradient = max(Vec8f().load_a(_gradient + x - bgStride), Vec8f().load_a(_gradient + x + bgStride));
             result |= gradient & mask;
 
-            mask = Vec8fb(bin == 3);
+            mask = Vec8fb(direction == 3);
             gradient = max(Vec8f().load(_gradient + x - bgStride - 1), Vec8f().load(_gradient + x + bgStride + 1));
             result |= gradient & mask;
 
