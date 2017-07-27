@@ -258,10 +258,10 @@ static void hysteresis(float * VS_RESTRICT blur, bool * VS_RESTRICT label, const
                     const auto pos = coordinates.back();
                     coordinates.pop_back();
 
-                    const int yyStart = std::max(pos.second - 1, 0);
-                    const int yyStop = std::min(pos.second + 1, height - 1);
                     const int xxStart = std::max(pos.first - 1, 0);
                     const int xxStop = std::min(pos.first + 1, width - 1);
+                    const int yyStart = std::max(pos.second - 1, 0);
+                    const int yyStop = std::min(pos.second + 1, height - 1);
 
                     for (int yy = yyStart; yy <= yyStop; yy++) {
                         for (int xx = xxStart; xx <= xxStop; xx++) {
@@ -748,8 +748,13 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 //////////////////////////////////////////
 // Init
 
+#ifdef HAVE_OPENCL
+extern void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi);
+#endif
+
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
     configFunc("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VAPOURSYNTH_API_VERSION, 1, plugin);
+
     registerFunc("TCanny",
                  "clip:clip;"
                  "sigma:float[]:opt;"
@@ -761,4 +766,18 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
                  "opt:int:opt;"
                  "planes:int[]:opt;",
                  tcannyCreate, nullptr, plugin);
+
+#ifdef HAVE_OPENCL
+    registerFunc("TCannyCL",
+                 "clip:clip;"
+                 "sigma:float[]:opt;"
+                 "t_h:float:opt;"
+                 "t_l:float:opt;"
+                 "mode:int:opt;"
+                 "op:int:opt;"
+                 "gmmax:float:opt;"
+                 "info:int:opt;"
+                 "planes:int[]:opt;",
+                 tcannyCLCreate, nullptr, plugin);
+#endif
 }

@@ -30,6 +30,9 @@
     <ClCompile Include="vectorclass\instrset_detect.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="TCannyCL.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TCanny.hpp">

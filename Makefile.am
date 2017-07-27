@@ -1,5 +1,5 @@
-warning_flags = -Wall -Wextra -Wno-unused-parameter -Wshadow
-common_cflags = -O3 -ffast-math $(MFLAGS) $(warning_flags)
+warning_flags = -Wall -Wextra -Wshadow -Wno-unused-parameter
+common_cflags = -O3 -ffast-math $(warning_flags) $(MFLAGS)
 AM_CXXFLAGS = -std=c++14 $(common_cflags)
 
 AM_CPPFLAGS = $(VapourSynth_CFLAGS)
@@ -22,21 +22,19 @@ libtcanny_la_SOURCES += TCanny/TCanny_SSE2.cpp \
                         TCanny/vectorclass/vectormath_common.h \
                         TCanny/vectorclass/vectormath_trig.h
 
-
 noinst_LTLIBRARIES = libavx.la libavx2.la
 
-
 libavx_la_SOURCES = TCanny/TCanny_AVX.cpp
-
 libavx_la_CXXFLAGS = $(AM_CXXFLAGS) -mavx
 
-
 libavx2_la_SOURCES = TCanny/TCanny_AVX2.cpp
-
 libavx2_la_CXXFLAGS = $(AM_CXXFLAGS) -mfma -mavx2
-
 
 libtcanny_la_LIBADD = libavx.la libavx2.la
 endif
 
-libtcanny_la_LDFLAGS = -no-undefined -avoid-version $(PLUGINLDFLAGS)
+if OPENCL
+libtcanny_la_SOURCES += TCanny/TCannyCL.cpp
+endif
+
+libtcanny_la_LDFLAGS = -no-undefined -avoid-version $(PLUGINLDFLAGS) $(OPENCLLDFLAGS)
