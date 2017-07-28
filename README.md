@@ -43,6 +43,7 @@ Usage
 
 * planes: A list of the planes to process. By default all planes are processed.
 
+---
 
     tcanny.TCannyCL(clip clip[, float[] sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, bint info=False, int[] planes])
 
@@ -52,7 +53,7 @@ Usage
 Compilation
 ===========
 
-Requires `Boost` unless `--disable-opencl` is specified.
+Requires `Boost` unless configured with `--disable-opencl`.
 
 ```
 ./autogen.sh

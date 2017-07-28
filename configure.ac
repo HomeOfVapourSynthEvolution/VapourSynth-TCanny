@@ -1,4 +1,4 @@
-AC_INIT([TCanny], [8], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/issues], [TCanny], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/])
+AC_INIT([TCanny], [10], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/issues], [TCanny], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/])
 
 : ${CXXFLAGS=""}
 
