@@ -1,4 +1,4 @@
-AC_INIT([TCanny], [7], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/issues], [TCanny], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/])
+AC_INIT([TCanny], [10], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/issues], [TCanny], [https://github.com/HomeOfVapourSynthEvolution/VapourSynth-TCanny/])
 
 : ${CXXFLAGS=""}
 
@@ -13,15 +13,11 @@ AC_CANONICAL_HOST
 
 
 X86="false"
-PPC="false"
-ARM="false"
 
 AS_CASE(
         [$host_cpu],
         [i?86], [BITS="32" X86="true"],
         [x86_64], [BITS="64" X86="true"],
-        [powerpc*], [PPC="true"],
-        [arm*], [ARM="true"]
 )
 
 AS_CASE(
@@ -47,7 +43,19 @@ AS_IF(
 )
 
 
+AC_ARG_ENABLE([opencl], AS_HELP_STRING([--enable-opencl], [Enable the TCannyCL filter. (default=yes)]))
+AS_IF(
+      [test "x$enable_opencl" != "xno"],
+      [
+       AC_DEFINE([HAVE_OPENCL])
+
+       AC_SUBST([OPENCLLDFLAGS], ["-lOpenCL"])
+      ]
+)
+
+
 AM_CONDITIONAL([VS_TARGET_CPU_X86], [test "x$X86" = "xtrue"])
+AM_CONDITIONAL([OPENCL], [test "x$enable_opencl" != "xno"])
 
 
 PKG_CHECK_MODULES([VapourSynth], [vapoursynth])
