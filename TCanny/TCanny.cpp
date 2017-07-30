@@ -776,6 +776,8 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
                  "mode:int:opt;"
                  "op:int:opt;"
                  "gmmax:float:opt;"
+                 "device:int:opt;"
+                 "list_device:int:opt;"
                  "info:int:opt;"
                  "planes:int[]:opt;",
                  tcannyCLCreate, nullptr, plugin);

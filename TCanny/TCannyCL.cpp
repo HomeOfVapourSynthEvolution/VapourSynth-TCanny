@@ -34,7 +34,6 @@ struct TCannyCLData {
     bool process[3];
     compute::buffer horizontalWeights[3], verticalWeights[3];
     int horizontalRadius[3], verticalRadius[3];
-    float magnitude;
     unsigned peak;
     float offset[3], lower[3], upper[3];
     compute::command_queue queue;
@@ -111,7 +110,7 @@ static const VSFrameRef *VS_CC tcannyCLGetFrame(int n, int activationReason, voi
                         d->binarizeCE.set_args(d->buffer, d->dst[plane], d->peak, d->lower[plane], d->upper[plane]);
                         d->queue.enqueue_nd_range_kernel(d->binarizeCE, 2, nullptr, globalWorkSize, nullptr);
                     } else {
-                        d->discretizeGM.set_args(d->gradient[plane], d->dst[plane], d->magnitude, d->peak, d->offset[plane]);
+                        d->discretizeGM.set_args(d->gradient[plane], d->dst[plane], d->peak, d->offset[plane]);
                         d->queue.enqueue_nd_range_kernel(d->discretizeGM, 2, nullptr, globalWorkSize, nullptr);
                     }
 
@@ -188,6 +187,10 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         if (err)
             gmmax = 50.f;
 
+        int device = int64ToIntS(vsapi->propGetInt(in, "device", 0, &err));
+        if (err)
+            device = -1;
+
         for (int i = 0; i < 3; i++) {
             if (horizontalSigma[i] < 0.f)
                 throw std::string{ "sigma must be greater than or equal to 0.0" };
@@ -205,6 +208,9 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         if (gmmax < 1.f)
             throw std::string{ "gmmax must be greater than or equal to 1.0" };
 
+        if (device >= static_cast<int>(compute::system::device_count()))
+            throw std::string{ "device index out of range" };
+
         const int m = vsapi->propNumElements(in, "planes");
 
         for (int i = 0; i < 3; i++)
@@ -220,6 +226,34 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
                 throw std::string{ "plane specified twice" };
 
             d->process[n] = true;
+        }
+
+        if (!!vsapi->propGetInt(in, "list_device", 0, &err)) {
+            const auto devices = compute::system::devices();
+            std::string text;
+
+            for (size_t i = 0; i < devices.size(); i++)
+                text += std::to_string(i) + ": " + devices[i].name() + " (" + devices[i].platform().name() + ")" + "\n";
+
+            VSMap * args = vsapi->createMap();
+            vsapi->propSetNode(args, "clip", d->node, paReplace);
+            vsapi->freeNode(d->node);
+            vsapi->propSetData(args, "text", text.c_str(), -1, paReplace);
+
+            VSMap * ret = vsapi->invoke(vsapi->getPluginById("com.vapoursynth.text", core), "Text", args);
+            if (vsapi->getError(ret)) {
+                vsapi->setError(out, vsapi->getError(ret));
+                vsapi->freeMap(args);
+                vsapi->freeMap(ret);
+                return;
+            }
+
+            d->node = vsapi->propGetNode(ret, "clip", 0, nullptr);
+            vsapi->freeMap(args);
+            vsapi->freeMap(ret);
+            vsapi->propSetNode(out, "clip", d->node, paReplace);
+            vsapi->freeNode(d->node);
+            return;
         }
 
         if (d->vi->format->sampleType == stInteger) {
@@ -244,8 +278,11 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
             }
         }
 
-        const compute::context ctx = compute::system::default_context();
-        d->queue = compute::command_queue{ ctx, ctx.get_device() };
+        compute::device gpu = compute::system::default_device();
+        if (device > -1)
+            gpu = compute::system::devices()[device];
+        const compute::context ctx{ gpu };
+        d->queue = compute::command_queue{ ctx, gpu };
 
         for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
             if (d->process[plane] && horizontalSigma[plane]) {
@@ -262,15 +299,14 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
             }
         }
 
-        d->magnitude = 255.f / gmmax;
-
         compute::program program = compute::program::create_with_source(source, ctx);
         try {
             std::string options{ "-cl-denorms-are-zero -cl-fast-relaxed-math -Werror" };
-            options += " -D MODE=" + std::to_string(d->mode);
-            options += " -D OP=" + std::to_string(op);
             options += " -D T_H=" + std::to_string(t_h);
             options += " -D T_L=" + std::to_string(t_l);
+            options += " -D MODE=" + std::to_string(d->mode);
+            options += " -D OP=" + std::to_string(op);
+            options += " -D MAGNITUDE=" + std::to_string(255.f / gmmax);
             program.build(options);
         } catch (const compute::opencl_error & error) {
             throw error.error_string() + "\n" + program.build_log();
@@ -295,8 +331,6 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         d->hysteresis = program.create_kernel("hysteresis");
 
         if (!!vsapi->propGetInt(in, "info", 0, &err)) {
-            const compute::device gpu = ctx.get_device();
-
             std::string text{ "=== Device Info ===\n" };
             text += "Name: " + gpu.get_info<CL_DEVICE_NAME>() + "\n";
             text += "Vendor: " + gpu.get_info<CL_DEVICE_VENDOR>() + "\n";

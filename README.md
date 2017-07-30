@@ -45,7 +45,11 @@ Usage
 
 ---
 
-    tcanny.TCannyCL(clip clip[, float[] sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, bint info=False, int[] planes])
+    tcanny.TCannyCL(clip clip[, float[] sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int device=-1, bint list_device=False, bint info=False, int[] planes])
+
+* device: Sets target OpenCL device. Use `list_device` to get the index of the available devices.
+
+* list_device: Whether the devices list is drawn on the frame.
 
 * info: Whether the OpenCL-related info is drawn on the frame.
 
