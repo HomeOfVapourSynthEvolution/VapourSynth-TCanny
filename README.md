@@ -23,8 +23,6 @@ Usage
   * -1 = gaussian blur only
   * 0 = thresholded edge map (2^bitdepth-1 for edge, 0 for non-edge)
   * 1 = gradient magnitude map
-  * 2 = edge pixel only gradient direction map (non-edge pixels set to 0)
-  * 3 = gradient direction map
 
 * op: Sets the operator for edge detection.
   * 0 = the operator used in tritical's original filter
@@ -47,7 +45,7 @@ Usage
 
     tcanny.TCannyCL(clip clip[, float[] sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int device=-1, bint list_device=False, bint info=False, int[] planes])
 
-* device: Sets target OpenCL device. Use `list_device` to get the index of the available devices.
+* device: Sets target OpenCL device. Use `list_device` to get the index of the available devices. By default the default device is selected.
 
 * list_device: Whether the devices list is drawn on the frame.
 
