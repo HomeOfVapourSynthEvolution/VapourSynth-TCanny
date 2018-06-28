@@ -1,5 +1,5 @@
 warning_flags = -Wall -Wextra -Wshadow -Wno-unused-parameter
-common_cflags = -O3 -ffast-math $(warning_flags) $(MFLAGS)
+common_cflags = -O3 -ffast-math -fvisibility=hidden $(warning_flags) $(MFLAGS)
 AM_CXXFLAGS = -std=c++14 $(common_cflags)
 
 AM_CPPFLAGS = $(VapourSynth_CFLAGS)
@@ -28,7 +28,7 @@ libavx_la_SOURCES = TCanny/TCanny_AVX.cpp
 libavx_la_CXXFLAGS = $(AM_CXXFLAGS) -mavx
 
 libavx2_la_SOURCES = TCanny/TCanny_AVX2.cpp
-libavx2_la_CXXFLAGS = $(AM_CXXFLAGS) -mfma -mavx2
+libavx2_la_CXXFLAGS = $(AM_CXXFLAGS) -mavx2 -mfma
 
 libtcanny_la_LIBADD = libavx.la libavx2.la
 endif
