@@ -21,6 +21,8 @@
 **   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
+#include <clocale>
+
 #include "TCanny.hpp"
 #include "TCanny.cl"
 
@@ -301,12 +303,14 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
 
         compute::program program = compute::program::create_with_source(source, ctx);
         try {
+            std::setlocale(LC_ALL, "C");
             std::string options{ "-cl-denorms-are-zero -cl-fast-relaxed-math -Werror" };
             options += " -D T_H=" + std::to_string(t_h);
             options += " -D T_L=" + std::to_string(t_l);
             options += " -D MODE=" + std::to_string(d->mode);
             options += " -D OP=" + std::to_string(op);
             options += " -D MAGNITUDE=" + std::to_string(255.f / gmmax);
+            std::setlocale(LC_ALL, "");
             program.build(options);
         } catch (const compute::opencl_error & error) {
             throw error.error_string() + "\n" + program.build_log();
