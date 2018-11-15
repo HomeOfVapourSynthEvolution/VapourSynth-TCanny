@@ -18,7 +18,7 @@ OPENCLLDFLAGS="-lOpenCL"
 AS_CASE(
         [$host_cpu],
         [i?86], [BITS="32" X86="true"],
-        [x86_64], [BITS="64" X86="true"],
+        [x86_64], [BITS="64" X86="true"]
 )
 
 AS_CASE(
@@ -48,13 +48,16 @@ AS_IF(
 )
 
 
-AC_ARG_ENABLE([opencl], AS_HELP_STRING([--enable-opencl], [Enable the TCannyCL filter. (default=yes)]))
+AC_ARG_ENABLE([opencl], AS_HELP_STRING([--enable-opencl], [Enable TCannyCL filter (default=yes)]))
 AS_IF(
       [test "x$enable_opencl" != "xno"],
       [
        AC_DEFINE([HAVE_OPENCL])
 
        AC_SUBST([OPENCLLDFLAGS], ["$OPENCLLDFLAGS"])
+      ],
+      [
+       OPENCLLDFLAGS=
       ]
 )
 
