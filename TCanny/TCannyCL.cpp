@@ -22,6 +22,7 @@
 */
 
 #include <clocale>
+#include <cstdio>
 
 #include "TCanny.hpp"
 #include "TCanny.cl"
@@ -304,12 +305,16 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         compute::program program = compute::program::create_with_source(source, ctx);
         try {
             std::setlocale(LC_ALL, "C");
+            char buf[100];
             std::string options{ "-cl-denorms-are-zero -cl-fast-relaxed-math -Werror" };
-            options += " -D T_H=" + std::to_string(t_h);
-            options += " -D T_L=" + std::to_string(t_l);
+            std::snprintf(buf, 100, "%.20ff", t_h);
+            options += " -D T_H=" + std::string{ buf };
+            std::snprintf(buf, 100, "%.20ff", t_l);
+            options += " -D T_L=" + std::string{ buf };
             options += " -D MODE=" + std::to_string(d->mode);
             options += " -D OP=" + std::to_string(op);
-            options += " -D MAGNITUDE=" + std::to_string(255.f / gmmax);
+            std::snprintf(buf, 100, "%.20ff", 255.f / gmmax);
+            options += " -D MAGNITUDE=" + std::string{ buf };
             std::setlocale(LC_ALL, "");
             program.build(options);
         } catch (const compute::opencl_error & error) {
