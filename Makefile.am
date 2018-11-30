@@ -7,6 +7,7 @@ AM_CPPFLAGS = $(VapourSynth_CFLAGS)
 lib_LTLIBRARIES = libtcanny.la
 
 libtcanny_la_SOURCES = TCanny/TCanny.cpp \
+                       TCanny/TCanny.hpp \
                        TCanny/vectorclass/instrset.h \
                        TCanny/vectorclass/instrset_detect.cpp
 

@@ -27,6 +27,10 @@
 #include "TCanny.hpp"
 #include "TCanny.cl"
 
+#define BOOST_COMPUTE_DEBUG_KERNEL_COMPILATION
+#define BOOST_COMPUTE_HAVE_THREAD_LOCAL
+#define BOOST_COMPUTE_THREAD_SAFE
+#define BOOST_COMPUTE_USE_OFFLINE_CACHE
 #include <boost/compute/core.hpp>
 namespace compute = boost::compute;
 
@@ -302,7 +306,7 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
             }
         }
 
-        compute::program program = compute::program::create_with_source(source, ctx);
+        compute::program program;
         try {
             std::setlocale(LC_ALL, "C");
             char buf[100];
@@ -316,7 +320,7 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
             std::snprintf(buf, 100, "%.20ff", 255.f / gmmax);
             options += " -D MAGNITUDE=" + std::string{ buf };
             std::setlocale(LC_ALL, "");
-            program.build(options);
+            program = compute::program::build_with_source(source, ctx, options);
         } catch (const compute::opencl_error & error) {
             throw error.error_string() + "\n" + program.build_log();
         }
