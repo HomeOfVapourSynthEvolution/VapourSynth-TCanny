@@ -1061,6 +1061,11 @@ static inline Vec32uc min(Vec32uc const & a, Vec32uc const & b) {
     return _mm256_min_epu8(a,b);
 }
 
+// function avg: (a + b + 1) >> 1
+static inline Vec32uc avg(Vec32uc const & a, Vec32uc const & b) {
+    return _mm256_avg_epu8(a,b);
+}
+
 
     
 /*****************************************************************************
@@ -1791,6 +1796,11 @@ static inline Vec16us max(Vec16us const & a, Vec16us const & b) {
 // function min: a < b ? a : b
 static inline Vec16us min(Vec16us const & a, Vec16us const & b) {
     return _mm256_min_epu16(a,b);
+}
+
+// function avg: (a + b + 1) >> 1
+static inline Vec16us avg(Vec16us const & a, Vec16us const & b) {
+    return _mm256_avg_epu16(a,b);
 }
 
 
@@ -5047,7 +5057,7 @@ static inline Vec32uc compress_saturated (Vec16us const & low, Vec16us const & h
 // Function compress : packs two vectors of 16-bit integers into one vector of 8-bit integers
 // Signed to unsigned, with saturation
 static inline Vec32uc compress_saturated_s2u (Vec16s const & low, Vec16s const & high) {
-    __m256i pk    = _mm256_packus_epi16(low,high);            // packed with unsigned saturation
+    __m256i pk    = _mm256_packus_epi16(low,high);            // this instruction saturates from signed 16 bit to unsigned 8 bit
     return          _mm256_permute4x64_epi64(pk, 0xD8);       // put in right place
 }
 
@@ -5092,7 +5102,7 @@ static inline Vec16us compress_saturated (Vec8ui const & low, Vec8ui const & hig
 // Function compress : packs two vectors of 32-bit integers into one vector of 16-bit integers
 // Signed to unsigned, with saturation
 static inline Vec16us compress_saturated_s2u (Vec8i const & low, Vec8i const & high) {
-    __m256i pk    =  _mm256_packus_epi32(low,high);           // pack with unsigned saturation
+    __m256i pk    =  _mm256_packus_epi32(low,high);           // this instruction saturates from signed 32 bit to unsigned 16 bit
     return           _mm256_permute4x64_epi64(pk, 0xD8);      // put in right place
 }
 
