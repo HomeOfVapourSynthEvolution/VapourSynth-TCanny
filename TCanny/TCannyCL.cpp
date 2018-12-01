@@ -49,20 +49,20 @@ struct TCannyCLData {
     compute::buffer buffer, label;
 };
 
-static void VS_CC tcannyCLInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
+static void VS_CC tcannyclInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
     TCannyCLData * d = static_cast<TCannyCLData *>(*instanceData);
     vsapi->setVideoInfo(d->vi, 1, node);
 }
 
-static const VSFrameRef *VS_CC tcannyCLGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
+static const VSFrameRef *VS_CC tcannyclGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
     TCannyCLData * d = static_cast<TCannyCLData *>(*instanceData);
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
         const VSFrameRef * src = vsapi->getFrameFilter(n, d->node, frameCtx);
-        const VSFrameRef * fr[]{ d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
-        const int pl[]{ 0, 1, 2 };
+        const VSFrameRef * fr[] = { d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
+        const int pl[] = { 0, 1, 2 };
         VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
 
         try {
@@ -74,9 +74,9 @@ static const VSFrameRef *VS_CC tcannyCLGetFrame(int n, int activationReason, voi
                     const uint8_t * srcp = vsapi->getReadPtr(src, plane);
                     uint8_t * dstp = vsapi->getWritePtr(dst, plane);
 
-                    const size_t origin[]{ 0, 0, 0 };
-                    const size_t region[]{ width, height, 1 };
-                    const size_t globalWorkSize[]{ width, height };
+                    const size_t origin[] = { 0, 0, 0 };
+                    const size_t region[] = { width, height, 1 };
+                    const size_t globalWorkSize[] = { width, height };
 
                     d->queue.enqueue_write_image(d->src[plane], origin, region, srcp, stride);
 
@@ -102,8 +102,8 @@ static const VSFrameRef *VS_CC tcannyCLGetFrame(int n, int activationReason, voi
                             constexpr cl_uchar pattern = 0;
                             d->queue.enqueue_fill_buffer(d->label, &pattern, sizeof(cl_uchar), 0, width * height * sizeof(cl_uchar));
 
-                            const size_t paddedGlobalWorkSize[]{ (width + 7) & -8, (height + 7) & -8 };
-                            const size_t localWorkSize[]{ 8, 8 };
+                            const size_t paddedGlobalWorkSize[] = { (width + 7) & -8, (height + 7) & -8 };
+                            const size_t localWorkSize[] = { 8, 8 };
 
                             d->hysteresis.set_args(d->buffer, d->label, static_cast<int>(width), static_cast<int>(height));
                             d->queue.enqueue_nd_range_kernel(d->hysteresis, 2, nullptr, paddedGlobalWorkSize, localWorkSize);
@@ -138,14 +138,14 @@ static const VSFrameRef *VS_CC tcannyCLGetFrame(int n, int activationReason, voi
     return nullptr;
 }
 
-static void VS_CC tcannyCLFree(void *instanceData, VSCore *core, const VSAPI *vsapi) {
+static void VS_CC tcannyclFree(void *instanceData, VSCore *core, const VSAPI *vsapi) {
     TCannyCLData * d = static_cast<TCannyCLData *>(instanceData);
     vsapi->freeNode(d->node);
     delete d;
 }
 
-void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi) {
-    std::unique_ptr<TCannyCLData> d{ new TCannyCLData{} };
+void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi) {
+    std::unique_ptr<TCannyCLData> d = std::make_unique<TCannyCLData>();
     int err;
 
     d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
@@ -154,7 +154,7 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
     try {
         if (!isConstantFormat(d->vi) || (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
             (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
-            throw std::string{ "only constant format 8-16 bits integer and 32 bits float input supported" };
+            throw std::string{ "only constant format 8-16 bit integer and 32 bit float input supported" };
 
         const int numSigma = vsapi->propNumElements(in, "sigma");
         if (numSigma > d->vi->format->numPlanes)
@@ -207,10 +207,10 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
             throw std::string{ "t_h must be greater than t_l" };
 
         if (d->mode < -1 || d->mode > 1)
-            throw std::string{ "mode must be -1, 0 or 1" };
+            throw std::string{ "mode must be -1, 0, or 1" };
 
         if (op < 0 || op > 3)
-            throw std::string{ "op must be 0, 1, 2 or 3" };
+            throw std::string{ "op must be 0, 1, 2, or 3" };
 
         if (gmmax < 1.f)
             throw std::string{ "gmmax must be greater than or equal to 1.0" };
@@ -221,7 +221,7 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         const int m = vsapi->propNumElements(in, "planes");
 
         for (int i = 0; i < 3; i++)
-            d->process[i] = m <= 0;
+            d->process[i] = (m <= 0);
 
         for (int i = 0; i < m; i++) {
             const int n = int64ToIntS(vsapi->propGetInt(in, "planes", i, nullptr));
@@ -460,6 +460,6 @@ void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         return;
     }
 
-    vsapi->createFilter(in, out, "TCannyCL", tcannyCLInit, tcannyCLGetFrame, tcannyCLFree, fmParallelRequests, 0, d.release(), core);
+    vsapi->createFilter(in, out, "TCannyCL", tcannyclInit, tcannyclGetFrame, tcannyclFree, fmParallelRequests, 0, d.release(), core);
 }
 #endif

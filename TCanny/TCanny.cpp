@@ -328,7 +328,7 @@ static void discretizeGM_c(const float * gradient, T * VS_RESTRICT dstp, const i
 }
 
 template<typename T>
-static void process(const VSFrameRef * src, VSFrameRef * dst, const TCannyData * d, const VSAPI * vsapi) noexcept {
+static void filter(const VSFrameRef * src, VSFrameRef * dst, const TCannyData * d, const VSAPI * vsapi) noexcept {
     for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const int width = vsapi->getFrameWidth(src, plane);
@@ -489,8 +489,8 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
 #endif
 
         const VSFrameRef * src = vsapi->getFrameFilter(n, d->node, frameCtx);
-        const VSFrameRef * fr[]{ d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
-        const int pl[]{ 0, 1, 2 };
+        const VSFrameRef * fr[] = { d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
+        const int pl[] = { 0, 1, 2 };
         VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
 
         try {
@@ -550,11 +550,11 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
         }
 
         if (d->vi->format->bytesPerSample == 1)
-            process<uint8_t>(src, dst, d, vsapi);
+            filter<uint8_t>(src, dst, d, vsapi);
         else if (d->vi->format->bytesPerSample == 2)
-            process<uint16_t>(src, dst, d, vsapi);
+            filter<uint16_t>(src, dst, d, vsapi);
         else
-            process<float>(src, dst, d, vsapi);
+            filter<float>(src, dst, d, vsapi);
 
         vsapi->freeFrame(src);
         return dst;
@@ -592,7 +592,7 @@ static void VS_CC tcannyFree(void *instanceData, VSCore *core, const VSAPI *vsap
 }
 
 static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi) {
-    std::unique_ptr<TCannyData> d{ new TCannyData{} };
+    std::unique_ptr<TCannyData> d = std::make_unique<TCannyData>();
     int err;
 
     d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
@@ -601,7 +601,7 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
     try {
         if (!isConstantFormat(d->vi) || (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
             (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
-            throw std::string{ "only constant format 8-16 bits integer and 32 bits float input supported" };
+            throw std::string{ "only constant format 8-16 bit integer and 32 bit float input supported" };
 
         if (d->vi->height < 2)
             throw std::string{ "the clip's height must be greater than or equal to 2" };
@@ -655,21 +655,21 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
             throw std::string{ "t_h must be greater than t_l" };
 
         if (d->mode < -1 || d->mode > 1)
-            throw std::string{ "mode must be -1, 0 or 1" };
+            throw std::string{ "mode must be -1, 0, or 1" };
 
         if (d->op < 0 || d->op > 3)
-            throw std::string{ "op must be 0, 1, 2 or 3" };
+            throw std::string{ "op must be 0, 1, 2, or 3" };
 
         if (gmmax < 1.f)
             throw std::string{ "gmmax must be greater than or equal to 1.0" };
 
         if (opt < 0 || opt > 4)
-            throw std::string{ "opt must be 0, 1, 2, 3 or 4" };
+            throw std::string{ "opt must be 0, 1, 2, 3, or 4" };
 
         const int m = vsapi->propNumElements(in, "planes");
 
         for (int i = 0; i < 3; i++)
-            d->process[i] = m <= 0;
+            d->process[i] = (m <= 0);
 
         for (int i = 0; i < m; i++) {
             const int n = int64ToIntS(vsapi->propGetInt(in, "planes", i, nullptr));
@@ -749,7 +749,7 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 // Init
 
 #ifdef HAVE_OPENCL
-extern void VS_CC tcannyCLCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi);
+extern void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi);
 #endif
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
@@ -780,6 +780,6 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
                  "list_device:int:opt;"
                  "info:int:opt;"
                  "planes:int[]:opt;",
-                 tcannyCLCreate, nullptr, plugin);
+                 tcannyclCreate, nullptr, plugin);
 #endif
 }

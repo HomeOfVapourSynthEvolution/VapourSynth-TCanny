@@ -47,9 +47,9 @@
       <DisableSpecificWarnings>4244;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
+      <SubSystem>Windows</SubSystem>
       <AdditionalDependencies>OpenCL.lib;libboost_filesystem-vc141-mt-x64-1_68.lib;libboost_system-vc141-mt-x64-1_68.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
