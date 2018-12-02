@@ -47,18 +47,17 @@ Usage
 
 * device: Sets target OpenCL device. Use `list_device` to get the index of the available devices. By default the default device is selected.
 
-* list_device: Whether the devices list is drawn on the frame.
+* list_device: Whether to draw the devices list on the frame.
 
-* info: Whether the OpenCL-related info is drawn on the frame.
+* info: Whether to draw the OpenCL-related info on the frame.
 
 
 Compilation
 ===========
 
-Requires `Boost` unless configured with `--disable-opencl`.
+Requires `Boost` unless specify `-D opencl=false`.
 
 ```
-./autogen.sh
-./configure
-make
+meson build
+ninja -C build
 ```
