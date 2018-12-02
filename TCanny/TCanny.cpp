@@ -20,8 +20,6 @@
 **   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
-#include <thread>
-#include <unordered_map>
 #include <vector>
 
 #include "TCanny.hpp"
@@ -220,7 +218,7 @@ static void detectEdge_c(float * blur, float * VS_RESTRICT gradient, unsigned * 
 
 static void nonMaximumSuppression_c(const unsigned * direction, float * VS_RESTRICT gradient, float * VS_RESTRICT blur, const int width, const int height,
                                     const int stride, const int bgStride) noexcept {
-    const int offsets[]{ 1, -bgStride + 1, -bgStride, -bgStride - 1 };
+    const int offsets[] = { 1, -bgStride + 1, -bgStride, -bgStride - 1 };
 
     gradient[-1] = gradient[0];
     gradient[-1 + bgStride * (height - 1)] = gradient[bgStride * (height - 1)];
@@ -501,16 +499,12 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
                 if (!buffer)
                     throw std::string{ "malloc failure (buffer)" };
                 d->buffer.emplace(threadId, buffer);
-            }
 
-            if (!d->blur.count(threadId)) {
                 float * blur = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + 16) * d->vi->height * sizeof(float), 32);
                 if (!blur)
                     throw std::string{ "malloc failure (blur)" };
                 d->blur.emplace(threadId, blur);
-            }
 
-            if (!d->gradient.count(threadId)) {
                 if (d->mode != -1) {
                     float * gradient = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + 16) * (d->vi->height + 2) * sizeof(float), 32);
                     if (!gradient)
@@ -519,26 +513,19 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
                 } else {
                     d->gradient.emplace(threadId, nullptr);
                 }
-            }
 
-            if (!d->direction.count(threadId)) {
                 if (d->mode == 0) {
                     unsigned * direction = vs_aligned_malloc<unsigned>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(unsigned), 32);
                     if (!direction)
                         throw std::string{ "malloc failure (direction)" };
                     d->direction.emplace(threadId, direction);
-                } else {
-                    d->direction.emplace(threadId, nullptr);
-                }
-            }
 
-            if (!d->label.count(threadId)) {
-                if (d->mode == 0) {
                     bool * label = new (std::nothrow) bool[d->vi->width * d->vi->height];
                     if (!label)
                         throw std::string{ "malloc failure (label)" };
                     d->label.emplace(threadId, label);
                 } else {
+                    d->direction.emplace(threadId, nullptr);
                     d->label.emplace(threadId, nullptr);
                 }
             }
