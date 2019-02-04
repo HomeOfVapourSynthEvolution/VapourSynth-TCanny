@@ -1,1 +1,5 @@
-option('opencl', type : 'boolean', value : true, description : 'Enable TCannyCL filter')
+option('opencl',
+  type : 'boolean',
+  value : true,
+  description : 'Enable TCannyCL filter'
+)

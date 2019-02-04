@@ -1,12 +1,13 @@
 project('TCanny', 'cpp',
   default_options : ['buildtype=release', 'b_ndebug=if-release', 'cpp_std=c++14'],
   meson_version : '>=0.48.0',
-  version : '11'
+  version : '12'
 )
 
 add_project_arguments('-ffast-math', language : 'cpp')
 
 sources = [
+  'TCanny/shared.hpp',
   'TCanny/TCanny.cpp',
   'TCanny/TCanny.hpp',
   'TCanny/vectorclass/instrset.h',
@@ -53,13 +54,13 @@ if host_machine.cpu_family().startswith('x86')
   endif
 
   libs += static_library('avx', 'TCanny/TCanny_AVX.cpp',
-    dependencies : [vapoursynth_dep],
+    dependencies : vapoursynth_dep,
     cpp_args : ['-mavx'],
     gnu_symbol_visibility : 'hidden'
   )
 
   libs += static_library('avx2', 'TCanny/TCanny_AVX2.cpp',
-    dependencies : [vapoursynth_dep],
+    dependencies : vapoursynth_dep,
     cpp_args : ['-mavx2', '-mfma'],
     gnu_symbol_visibility : 'hidden'
   )

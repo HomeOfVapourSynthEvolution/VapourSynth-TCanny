@@ -24,7 +24,7 @@
 #include <clocale>
 #include <cstdio>
 
-#include "TCanny.hpp"
+#include "shared.hpp"
 #include "TCanny.cl"
 
 #define BOOST_COMPUTE_DEBUG_KERNEL_COMPILATION
@@ -39,18 +39,18 @@ struct TCannyCLData {
     const VSVideoInfo * vi;
     int mode;
     bool process[3];
-    int horizontalRadius[3], verticalRadius[3];
+    int radiusH[3], radiusV[3];
     unsigned peak;
     float offset[3], lower[3], upper[3];
     compute::device gpu;
     compute::context ctx;
     compute::program program;
-    compute::buffer horizontalWeights[3], verticalWeights[3];
+    compute::buffer weightsH[3], weightsV[3];
     cl_image_format clImageFormat;
     std::unordered_map<std::thread::id, compute::command_queue> queue;
     std::unordered_map<std::thread::id, compute::kernel> copyPlane, gaussianBlurH, gaussianBlurV, detectEdge, nonMaximumSuppression, hysteresis, outputGB, binarizeCE, discretizeGM;
     std::unordered_map<std::thread::id, compute::image2d> src[3], dst[3], blur[3], gradient[3], direction[3];
-    std::unordered_map<std::thread::id, compute::buffer> buffer, label;
+    std::unordered_map<std::thread::id, compute::buffer> buffer, found;
 };
 
 static void VS_CC tcannyclInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
@@ -124,13 +124,13 @@ static const VSFrameRef *VS_CC tcannyclGetFrame(int n, int activationReason, voi
                 }
 
                 d->buffer.emplace(threadId, compute::buffer{ d->ctx, d->vi->width * d->vi->height * sizeof(cl_float), CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS });
-                d->label.emplace(threadId, compute::buffer{ d->ctx, d->vi->width * d->vi->height * sizeof(cl_uchar), CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS });
+                d->found.emplace(threadId, compute::buffer{ d->ctx, d->vi->width * d->vi->height * sizeof(cl_uchar), CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS });
             }
 
             auto queue = d->queue.at(threadId);
             auto copyPlane = d->copyPlane.at(threadId);
-            auto gaussianBlurH = d->gaussianBlurH.at(threadId);
             auto gaussianBlurV = d->gaussianBlurV.at(threadId);
+            auto gaussianBlurH = d->gaussianBlurH.at(threadId);
             auto detectEdge = d->detectEdge.at(threadId);
             auto nonMaximumSuppression = d->nonMaximumSuppression.at(threadId);
             auto hysteresis = d->hysteresis.at(threadId);
@@ -138,7 +138,7 @@ static const VSFrameRef *VS_CC tcannyclGetFrame(int n, int activationReason, voi
             auto binarizeCE = d->binarizeCE.at(threadId);
             auto discretizeGM = d->discretizeGM.at(threadId);
             auto buffer = d->buffer.at(threadId);
-            auto label = d->label.at(threadId);
+            auto found = d->found.at(threadId);
 
             for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
                 if (d->process[plane]) {
@@ -160,15 +160,17 @@ static const VSFrameRef *VS_CC tcannyclGetFrame(int n, int activationReason, voi
 
                     queue.enqueue_write_image(srcImage, origin, region, srcp, stride);
 
-                    if (d->horizontalRadius[plane]) {
-                        gaussianBlurV.set_args(srcImage, gradientImage, d->verticalWeights[plane], d->verticalRadius[plane], d->offset[plane]);
+                    if (d->radiusV[plane]) {
+                        gaussianBlurV.set_args(srcImage, gradientImage, d->weightsV[plane], d->radiusV[plane], d->offset[plane]);
                         queue.enqueue_nd_range_kernel(gaussianBlurV, 2, nullptr, globalWorkSize, nullptr);
-
-                        gaussianBlurH.set_args(gradientImage, blurImage, d->horizontalWeights[plane], d->horizontalRadius[plane]);
-                        queue.enqueue_nd_range_kernel(gaussianBlurH, 2, nullptr, globalWorkSize, nullptr);
                     } else {
-                        copyPlane.set_args(srcImage, blurImage, d->offset[plane]);
+                        copyPlane.set_args(srcImage, d->radiusH[plane] ? gradientImage : blurImage, d->offset[plane]);
                         queue.enqueue_nd_range_kernel(copyPlane, 2, nullptr, globalWorkSize, nullptr);
+                    }
+
+                    if (d->radiusH[plane]) {
+                        gaussianBlurH.set_args(gradientImage, blurImage, d->weightsH[plane], d->radiusH[plane]);
+                        queue.enqueue_nd_range_kernel(gaussianBlurH, 2, nullptr, globalWorkSize, nullptr);
                     }
 
                     if (d->mode != -1) {
@@ -176,16 +178,16 @@ static const VSFrameRef *VS_CC tcannyclGetFrame(int n, int activationReason, voi
                         queue.enqueue_nd_range_kernel(detectEdge, 2, nullptr, globalWorkSize, nullptr);
 
                         if (d->mode == 0) {
-                            nonMaximumSuppression.set_args(gradientImage, directionImage, buffer);
+                            nonMaximumSuppression.set_args(directionImage, gradientImage, buffer);
                             queue.enqueue_nd_range_kernel(nonMaximumSuppression, 2, nullptr, globalWorkSize, nullptr);
 
                             constexpr cl_uchar pattern = 0;
-                            queue.enqueue_fill_buffer(label, &pattern, sizeof(cl_uchar), 0, width * height * sizeof(cl_uchar));
+                            queue.enqueue_fill_buffer(found, &pattern, sizeof(cl_uchar), 0, width * height * sizeof(cl_uchar));
 
                             const size_t paddedGlobalWorkSize[] = { (width + 7) & -8, (height + 7) & -8 };
                             const size_t localWorkSize[] = { 8, 8 };
 
-                            hysteresis.set_args(buffer, label, static_cast<int>(width), static_cast<int>(height));
+                            hysteresis.set_args(buffer, found, static_cast<int>(width), static_cast<int>(height));
                             queue.enqueue_nd_range_kernel(hysteresis, 2, nullptr, paddedGlobalWorkSize, localWorkSize);
                         }
                     }
@@ -232,7 +234,8 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
     d->vi = vsapi->getVideoInfo(d->node);
 
     try {
-        if (!isConstantFormat(d->vi) || (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
+        if (!isConstantFormat(d->vi) ||
+            (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
             (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
             throw std::string{ "only constant format 8-16 bit integer and 32 bit float input supported" };
 
@@ -240,19 +243,19 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         if (numSigma > d->vi->format->numPlanes)
             throw std::string{ "more sigma given than the number of planes" };
 
-        float horizontalSigma[3], verticalSigma[3];
+        float sigmaH[3], sigmaV[3];
 
         for (int i = 0; i < 3; i++) {
             if (i < numSigma) {
-                horizontalSigma[i] = verticalSigma[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
+                sigmaH[i] = sigmaV[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
             } else if (i == 0) {
-                horizontalSigma[0] = verticalSigma[0] = 1.5f;
+                sigmaH[0] = sigmaV[0] = 1.5f;
             } else if (i == 1) {
-                horizontalSigma[1] = horizontalSigma[0] / (1 << d->vi->format->subSamplingW);
-                verticalSigma[1] = verticalSigma[0] / (1 << d->vi->format->subSamplingH);
+                sigmaH[1] = sigmaH[0] / (1 << d->vi->format->subSamplingW);
+                sigmaV[1] = sigmaV[0] / (1 << d->vi->format->subSamplingH);
             } else {
-                horizontalSigma[2] = horizontalSigma[1];
-                verticalSigma[2] = verticalSigma[1];
+                sigmaH[2] = sigmaH[1];
+                sigmaV[2] = sigmaV[1];
             }
         }
 
@@ -296,7 +299,7 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         }
 
         for (int i = 0; i < 3; i++) {
-            if (horizontalSigma[i] < 0.f)
+            if (sigmaH[i] < 0.f)
                 throw std::string{ "sigma must be greater than or equal to 0.0" };
         }
 
@@ -343,9 +346,7 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
             return;
         }
 
-        d->gpu = compute::system::default_device();
-        if (device > -1)
-            d->gpu = compute::system::devices().at(device);
+        d->gpu = (device < 0) ? compute::system::default_device() : compute::system::devices().at(device);
         d->ctx = compute::context{ d->gpu };
 
         if (!!vsapi->propGetInt(in, "info", 0, &err)) {
@@ -391,8 +392,8 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         const unsigned numThreads = vsapi->getCoreInfo(core)->numThreads;
         d->queue.reserve(numThreads);
         d->copyPlane.reserve(numThreads);
-        d->gaussianBlurH.reserve(numThreads);
         d->gaussianBlurV.reserve(numThreads);
+        d->gaussianBlurH.reserve(numThreads);
         d->detectEdge.reserve(numThreads);
         d->nonMaximumSuppression.reserve(numThreads);
         d->hysteresis.reserve(numThreads);
@@ -400,7 +401,7 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         d->binarizeCE.reserve(numThreads);
         d->discretizeGM.reserve(numThreads);
         d->buffer.reserve(numThreads);
-        d->label.reserve(numThreads);
+        d->found.reserve(numThreads);
         for (int i = 0; i < 3; i++) {
             d->src[i].reserve(numThreads);
             d->dst[i].reserve(numThreads);
@@ -432,17 +433,17 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         }
 
         for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
-            if (d->process[plane] && horizontalSigma[plane]) {
-                float * horizontalWeights = gaussianWeights(horizontalSigma[plane], &d->horizontalRadius[plane]);
-                float * verticalWeights = gaussianWeights(verticalSigma[plane], &d->verticalRadius[plane]);
-                if (!horizontalWeights || !verticalWeights)
+            if (d->process[plane] && sigmaH[plane]) {
+                float * weightsH = gaussianWeights(sigmaH[plane], d->radiusH[plane]);
+                float * weightsV = gaussianWeights(sigmaV[plane], d->radiusV[plane]);
+                if (!weightsH || !weightsV)
                     throw std::string{ "malloc failure (weights)" };
 
-                d->horizontalWeights[plane] = compute::buffer{ d->ctx, (d->horizontalRadius[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, horizontalWeights };
-                d->verticalWeights[plane] = compute::buffer{ d->ctx, (d->verticalRadius[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, verticalWeights };
+                d->weightsH[plane] = compute::buffer{ d->ctx, (d->radiusH[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, weightsH };
+                d->weightsV[plane] = compute::buffer{ d->ctx, (d->radiusV[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, weightsV };
 
-                delete[] horizontalWeights;
-                delete[] verticalWeights;
+                delete[] weightsH;
+                delete[] weightsV;
             }
         }
 
