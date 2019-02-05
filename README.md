@@ -9,11 +9,13 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
 Usage
 =====
 
-    tcanny.TCanny(clip clip[, float[] sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int opt=0, int[] planes=[0, 1, 2]])
+    tcanny.TCanny(clip clip[, float[] sigma=1.5, float[] sigma_v=sigma, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int opt=0, int[] planes=[0, 1, 2]])
 
 * clip: Clip to process. Any planar format with either integer sample type of 8-16 bit depth or float sample type of 32 bit depth is supported.
 
-* sigma: Standard deviation of gaussian blur. If a single `sigma` is specified, it will be used for all planes. If two `sigma` are given then the second value will be used for the third plane as well. The value used internally will be adjusted according to the subsampling of the second and third plane in each direction.
+* sigma: Standard deviation of horizontal gaussian blur. If a single `sigma` is specified, it will be used for all planes. If two `sigma` are given then the second value will be used for the third plane as well.
+
+* sigma_v: Standard deviation of vertical gaussian blur.
 
 * t_h: High gradient magnitude threshold for hysteresis.
 
@@ -43,7 +45,7 @@ Usage
 
 ---
 
-    tcanny.TCannyCL(clip clip[, float[] sigma=1.5, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int device=-1, bint list_device=False, bint info=False, int[] planes=[0, 1, 2]])
+    tcanny.TCannyCL(clip clip[, float[] sigma=1.5, float[] sigma_v=sigma, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int device=-1, bint list_device=False, bint info=False, int[] planes=[0, 1, 2]])
 
 * device: Sets target OpenCL device. Use `list_device` to get the index of the available devices. By default the default device is selected.
 

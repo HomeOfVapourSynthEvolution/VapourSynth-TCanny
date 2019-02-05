@@ -492,24 +492,36 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         if (d->vi->height < 2)
             throw std::string{ "the clip's height must be greater than or equal to 2" };
 
-        const int numSigma = vsapi->propNumElements(in, "sigma");
-        if (numSigma > d->vi->format->numPlanes)
-            throw std::string{ "more sigma given than the number of planes" };
+        const int numSigmaH = vsapi->propNumElements(in, "sigma");
+        if (numSigmaH > d->vi->format->numPlanes)
+            throw std::string{ "more sigma given than there are planes" };
+
+        const int numSigmaV = vsapi->propNumElements(in, "sigma_v");
+        if (numSigmaV > d->vi->format->numPlanes)
+            throw std::string{ "more sigma_v given than there are planes" };
 
         float sigmaH[3], sigmaV[3];
 
         for (int i = 0; i < 3; i++) {
-            if (i < numSigma) {
-                sigmaH[i] = sigmaV[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
-            } else if (i == 0) {
-                sigmaH[0] = sigmaV[0] = 1.5f;
-            } else if (i == 1) {
+            if (i < numSigmaH)
+                sigmaH[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
+            else if (i == 0)
+                sigmaH[0] = 1.5f;
+            else if (i == 1)
                 sigmaH[1] = sigmaH[0] / (1 << d->vi->format->subSamplingW);
-                sigmaV[1] = sigmaV[0] / (1 << d->vi->format->subSamplingH);
-            } else {
+            else
                 sigmaH[2] = sigmaH[1];
+
+            if (i < numSigmaV)
+                sigmaV[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma_v", i, nullptr));
+            else if (i < numSigmaH)
+                sigmaV[i] = sigmaH[i];
+            else if (i == 0)
+                sigmaV[0] = 1.5f;
+            else if (i == 1)
+                sigmaV[1] = sigmaV[0] / (1 << d->vi->format->subSamplingH);
+            else
                 sigmaV[2] = sigmaV[1];
-            }
         }
 
         d->t_h = static_cast<float>(vsapi->propGetFloat(in, "t_h", 0, &err));
@@ -552,6 +564,9 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         for (int i = 0; i < 3; i++) {
             if (sigmaH[i] < 0.f)
                 throw std::string{ "sigma must be greater than or equal to 0.0" };
+
+            if (sigmaV[i] < 0.f)
+                throw std::string{ "sigma_v must be greater than or equal to 0.0" };
         }
 
         if (d->t_l >= d->t_h)
@@ -600,21 +615,28 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         }
 
         for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
-            if (d->process[plane] && sigmaH[plane]) {
-                d->weightsH[plane] = gaussianWeights(sigmaH[plane], d->radiusH[plane]);
-                d->weightsV[plane] = gaussianWeights(sigmaV[plane], d->radiusV[plane]);
-                if (!d->weightsH[plane] || !d->weightsV[plane])
-                    throw std::string{ "malloc failure (weights)" };
+            if (d->process[plane]) {
+                if (sigmaH[plane]) {
+                    d->weightsH[plane] = gaussianWeights(sigmaH[plane], d->radiusH[plane]);
+                    if (!d->weightsH[plane])
+                        throw std::string{ "malloc failure (weightsH)" };
 
-                const int width = d->vi->width >> (plane ? d->vi->format->subSamplingW : 0);
-                const int height = d->vi->height >> (plane ? d->vi->format->subSamplingH : 0);
-                const std::string planeOrder{ plane == 0 ? "first" : (plane == 1 ? "second" : "third") };
+                    const int width = d->vi->width >> (plane ? d->vi->format->subSamplingW : 0);
+                    const std::string planeOrder{ plane == 0 ? "first" : (plane == 1 ? "second" : "third") };
+                    if (width < d->radiusH[plane] + 1)
+                        throw std::string{ "the " + planeOrder + " plane's width must be greater than or equal to " + std::to_string(d->radiusH[plane] + 1) + " for specified sigma" };
+                }
 
-                if (width < d->radiusH[plane] + 1)
-                    throw std::string{ "the " + planeOrder + " plane's width must be greater than or equal to " + std::to_string(d->radiusH[plane] + 1) + " for specified sigma" };
+                if (sigmaV[plane]) {
+                    d->weightsV[plane] = gaussianWeights(sigmaV[plane], d->radiusV[plane]);
+                    if (!d->weightsV[plane])
+                        throw std::string{ "malloc failure (weightsV)" };
 
-                if (height < d->radiusV[plane] + 1)
-                    throw std::string{ "the " + planeOrder + " plane's height must be greater than or equal to " + std::to_string(d->radiusV[plane] + 1) + " for specified sigma" };
+                    const int height = d->vi->height >> (plane ? d->vi->format->subSamplingH : 0);
+                    const std::string planeOrder{ plane == 0 ? "first" : (plane == 1 ? "second" : "third") };
+                    if (height < d->radiusV[plane] + 1)
+                        throw std::string{ "the " + planeOrder + " plane's height must be greater than or equal to " + std::to_string(d->radiusV[plane] + 1) + " for specified sigma_v" };
+                }
             }
         }
 
@@ -643,6 +665,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
     registerFunc("TCanny",
                  "clip:clip;"
                  "sigma:float[]:opt;"
+                 "sigma_v:float[]:opt;"
                  "t_h:float:opt;"
                  "t_l:float:opt;"
                  "mode:int:opt;"
@@ -656,6 +679,7 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
     registerFunc("TCannyCL",
                  "clip:clip;"
                  "sigma:float[]:opt;"
+                 "sigma_v:float[]:opt;"
                  "t_h:float:opt;"
                  "t_l:float:opt;"
                  "mode:int:opt;"

@@ -161,7 +161,7 @@ static const VSFrameRef *VS_CC tcannyclGetFrame(int n, int activationReason, voi
                     queue.enqueue_write_image(srcImage, origin, region, srcp, stride);
 
                     if (d->radiusV[plane]) {
-                        gaussianBlurV.set_args(srcImage, gradientImage, d->weightsV[plane], d->radiusV[plane], d->offset[plane]);
+                        gaussianBlurV.set_args(srcImage, d->radiusH[plane] ? gradientImage : blurImage, d->weightsV[plane], d->radiusV[plane], d->offset[plane]);
                         queue.enqueue_nd_range_kernel(gaussianBlurV, 2, nullptr, globalWorkSize, nullptr);
                     } else {
                         copyPlane.set_args(srcImage, d->radiusH[plane] ? gradientImage : blurImage, d->offset[plane]);
@@ -239,24 +239,36 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
             (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
             throw std::string{ "only constant format 8-16 bit integer and 32 bit float input supported" };
 
-        const int numSigma = vsapi->propNumElements(in, "sigma");
-        if (numSigma > d->vi->format->numPlanes)
-            throw std::string{ "more sigma given than the number of planes" };
+        const int numSigmaH = vsapi->propNumElements(in, "sigma");
+        if (numSigmaH > d->vi->format->numPlanes)
+            throw std::string{ "more sigma given than there are planes" };
+
+        const int numSigmaV = vsapi->propNumElements(in, "sigma_v");
+        if (numSigmaV > d->vi->format->numPlanes)
+            throw std::string{ "more sigma_v given than there are planes" };
 
         float sigmaH[3], sigmaV[3];
 
         for (int i = 0; i < 3; i++) {
-            if (i < numSigma) {
-                sigmaH[i] = sigmaV[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
-            } else if (i == 0) {
-                sigmaH[0] = sigmaV[0] = 1.5f;
-            } else if (i == 1) {
+            if (i < numSigmaH)
+                sigmaH[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
+            else if (i == 0)
+                sigmaH[0] = 1.5f;
+            else if (i == 1)
                 sigmaH[1] = sigmaH[0] / (1 << d->vi->format->subSamplingW);
-                sigmaV[1] = sigmaV[0] / (1 << d->vi->format->subSamplingH);
-            } else {
+            else
                 sigmaH[2] = sigmaH[1];
+
+            if (i < numSigmaV)
+                sigmaV[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma_v", i, nullptr));
+            else if (i < numSigmaH)
+                sigmaV[i] = sigmaH[i];
+            else if (i == 0)
+                sigmaV[0] = 1.5f;
+            else if (i == 1)
+                sigmaV[1] = sigmaV[0] / (1 << d->vi->format->subSamplingH);
+            else
                 sigmaV[2] = sigmaV[1];
-            }
         }
 
         float t_h = static_cast<float>(vsapi->propGetFloat(in, "t_h", 0, &err));
@@ -301,6 +313,9 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         for (int i = 0; i < 3; i++) {
             if (sigmaH[i] < 0.f)
                 throw std::string{ "sigma must be greater than or equal to 0.0" };
+
+            if (sigmaV[i] < 0.f)
+                throw std::string{ "sigma_v must be greater than or equal to 0.0" };
         }
 
         if (t_l >= t_h)
@@ -433,17 +448,26 @@ void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *c
         }
 
         for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
-            if (d->process[plane] && sigmaH[plane]) {
-                float * weightsH = gaussianWeights(sigmaH[plane], d->radiusH[plane]);
-                float * weightsV = gaussianWeights(sigmaV[plane], d->radiusV[plane]);
-                if (!weightsH || !weightsV)
-                    throw std::string{ "malloc failure (weights)" };
+            if (d->process[plane]) {
+                if (sigmaH[plane]) {
+                    float * weightsH = gaussianWeights(sigmaH[plane], d->radiusH[plane]);
+                    if (!weightsH)
+                        throw std::string{ "malloc failure (weightsH)" };
 
-                d->weightsH[plane] = compute::buffer{ d->ctx, (d->radiusH[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, weightsH };
-                d->weightsV[plane] = compute::buffer{ d->ctx, (d->radiusV[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, weightsV };
+                    d->weightsH[plane] = compute::buffer{ d->ctx, (d->radiusH[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, weightsH };
 
-                delete[] weightsH;
-                delete[] weightsV;
+                    delete[] weightsH;
+                }
+
+                if (sigmaV[plane]) {
+                    float * weightsV = gaussianWeights(sigmaV[plane], d->radiusV[plane]);
+                    if (!weightsV)
+                        throw std::string{ "malloc failure (weightsV)" };
+
+                    d->weightsV[plane] = compute::buffer{ d->ctx, (d->radiusV[plane] * 2 + 1) * sizeof(cl_float), CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR | CL_MEM_HOST_NO_ACCESS, weightsV };
+
+                    delete[] weightsV;
+                }
             }
         }
 
