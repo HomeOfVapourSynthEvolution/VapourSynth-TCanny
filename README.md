@@ -28,7 +28,7 @@ Usage
 
 * op: Sets the operator for edge detection.
   * 0 = the operator used in tritical's original filter
-  * 1 = the operator proposed by P. Zhou et al.
+  * 1 = the Prewitt operator whose use is proposed by P. Zhou et al. [1]
   * 2 = the Sobel operator
   * 3 = the Scharr operator
 
@@ -52,6 +52,8 @@ Usage
 * list_device: Whether to draw the devices list on the frame.
 
 * info: Whether to draw the OpenCL-related info on the frame.
+
+[1]: Zhou, P., Ye, W., & Wang, Q. (2011). An Improved Canny Algorithm for Edge Detection. Journal of Computational Information Systems, 7(5), 1516-1523.
 
 
 Compilation
