@@ -259,13 +259,13 @@ static void outputGB(const float * srcp, T * VS_RESTRICT dstp, const int width, 
 
 template<typename T>
 static void binarizeCE(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
-                       const uint16_t peak, const float lower, const float upper) noexcept {
+                       const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             if (std::is_integral<T>::value)
                 dstp[x] = (srcp[x] == fltMax) ? peak : 0;
             else
-                dstp[x] = (srcp[x] == fltMax) ? upper : lower;
+                dstp[x] = (srcp[x] == fltMax) ? 1.0f : 0.0f;
         }
 
         srcp += srcStride;
@@ -275,13 +275,13 @@ static void binarizeCE(const float * srcp, T * VS_RESTRICT dstp, const int width
 
 template<typename T>
 static void discretizeGM(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
-                         const float magnitude, const uint16_t peak, const float offset) noexcept {
+                         const float magnitude, const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
             if (std::is_integral<T>::value)
                 dstp[x] = std::min<unsigned>(srcp[x] * magnitude + 0.5f, peak);
             else
-                dstp[x] = srcp[x] * magnitude - offset;
+                dstp[x] = srcp[x] * magnitude;
         }
 
         srcp += srcStride;
@@ -327,9 +327,9 @@ static void filter_c(const VSFrameRef * src, VSFrameRef * dst, const TCannyData 
             if (d->mode == -1)
                 outputGB(blur, dstp, width, height, bgStride, stride, d->peak, d->offset[plane]);
             else if (d->mode == 0)
-                binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak, d->lower[plane], d->upper[plane]);
+                binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
             else
-                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->magnitude, d->peak, d->offset[plane]);
+                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->magnitude, d->peak);
         }
     }
 }
@@ -602,15 +602,10 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
             d->t_l /= 255.f;
 
             for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
-                if (plane == 0 || d->vi->format->colorFamily == cmRGB) {
+                if (plane == 0 || d->vi->format->colorFamily == cmRGB)
                     d->offset[plane] = 0.f;
-                    d->lower[plane] = 0.f;
-                    d->upper[plane] = 1.f;
-                } else {
+                else
                     d->offset[plane] = 0.5f;
-                    d->lower[plane] = -0.5f;
-                    d->upper[plane] = 0.5f;
-                }
             }
         }
 

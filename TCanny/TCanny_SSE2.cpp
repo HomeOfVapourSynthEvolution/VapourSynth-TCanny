@@ -307,11 +307,11 @@ void outputGB(const float * _srcp, float * dstp, const int width, const int heig
     }
 }
 
-template<typename T> static void binarizeCE(const float *, T *, const int, const int, const int, const int, const uint16_t, const float, const float) noexcept;
+template<typename T> static void binarizeCE(const float *, T *, const int, const int, const int, const int, const uint16_t) noexcept;
 
 template<>
 void binarizeCE(const float * srcp, uint8_t * dstp, const int width, const int height, const int srcStride, const int dstStride,
-                const uint16_t peak, const float lower, const float upper) noexcept {
+                const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 16) {
             const Vec4ib mask_4ib_0 = Vec4ib(Vec4f().load_a(srcp + x) == fltMax);
@@ -331,7 +331,7 @@ void binarizeCE(const float * srcp, uint8_t * dstp, const int width, const int h
 
 template<>
 void binarizeCE(const float * srcp, uint16_t * dstp, const int width, const int height, const int srcStride, const int dstStride,
-                const uint16_t peak, const float lower, const float upper) noexcept {
+                const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
             const Vec4ib mask_4ib_0 = Vec4ib(Vec4f().load_a(srcp + x) == fltMax);
@@ -347,11 +347,11 @@ void binarizeCE(const float * srcp, uint16_t * dstp, const int width, const int 
 
 template<>
 void binarizeCE(const float * srcp, float * dstp, const int width, const int height, const int srcStride, const int dstStride,
-                const uint16_t peak, const float lower, const float upper) noexcept {
+                const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 4) {
             const Vec4fb mask = (Vec4f().load_a(srcp + x) == fltMax);
-            select(mask, Vec4f(upper), Vec4f(lower)).stream(dstp + x);
+            select(mask, Vec4f(1.0f), Vec4f(0.0f)).stream(dstp + x);
         }
 
         srcp += srcStride;
@@ -359,11 +359,11 @@ void binarizeCE(const float * srcp, float * dstp, const int width, const int hei
     }
 }
 
-template<typename T> static void discretizeGM(const float *, T *, const int, const int, const int, const int, const float, const uint16_t, const float) noexcept;
+template<typename T> static void discretizeGM(const float *, T *, const int, const int, const int, const int, const float, const uint16_t) noexcept;
 
 template<>
 void discretizeGM(const float * _srcp, uint8_t * dstp, const int width, const int height, const int srcStride, const int dstStride,
-                  const float magnitude, const uint16_t peak, const float offset) noexcept {
+                  const float magnitude, const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 16) {
             const Vec4f srcp_4f_0 = Vec4f().load_a(_srcp + x);
@@ -387,7 +387,7 @@ void discretizeGM(const float * _srcp, uint8_t * dstp, const int width, const in
 
 template<>
 void discretizeGM(const float * _srcp, uint16_t * dstp, const int width, const int height, const int srcStride, const int dstStride,
-                  const float magnitude, const uint16_t peak, const float offset) noexcept {
+                  const float magnitude, const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 8) {
             const Vec4f srcp_4f_0 = Vec4f().load_a(_srcp + x);
@@ -405,11 +405,11 @@ void discretizeGM(const float * _srcp, uint16_t * dstp, const int width, const i
 
 template<>
 void discretizeGM(const float * _srcp, float * dstp, const int width, const int height, const int srcStride, const int dstStride,
-                  const float magnitude, const uint16_t peak, const float offset) noexcept {
+                  const float magnitude, const uint16_t peak) noexcept {
     for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x += 4) {
             const Vec4f srcp = Vec4f().load_a(_srcp + x);
-            mul_sub(srcp, magnitude, offset).stream(dstp + x);
+            (srcp * magnitude).stream(dstp + x);
         }
 
         _srcp += srcStride;
@@ -455,9 +455,9 @@ void filter_sse2(const VSFrameRef * src, VSFrameRef * dst, const TCannyData * co
             if (d->mode == -1)
                 outputGB(blur, dstp, width, height, bgStride, stride, d->peak, d->offset[plane]);
             else if (d->mode == 0)
-                binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak, d->lower[plane], d->upper[plane]);
+                binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
             else
-                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->magnitude, d->peak, d->offset[plane]);
+                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->magnitude, d->peak);
         }
     }
 }

@@ -22,7 +22,7 @@ struct TCannyData {
     float t_h, t_l;
     int mode, op;
     bool process[3];
-    float * weightsH[3], * weightsV[3], magnitude, offset[3], lower[3], upper[3];
+    float * weightsH[3], * weightsV[3], magnitude, offset[3];
     int vectorSize, alignment, radiusH[3], radiusV[3], radiusAlign;
     uint16_t peak;
     std::unordered_map<std::thread::id, float *> blur, gradient;
