@@ -650,13 +650,8 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 //////////////////////////////////////////
 // Init
 
-#ifdef HAVE_OPENCL
-extern void VS_CC tcannyclCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi);
-#endif
-
 VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
     configFunc("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VAPOURSYNTH_API_VERSION, 1, plugin);
-
     registerFunc("TCanny",
                  "clip:clip;"
                  "sigma:float[]:opt;"
@@ -669,21 +664,4 @@ VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegiste
                  "opt:int:opt;"
                  "planes:int[]:opt;",
                  tcannyCreate, nullptr, plugin);
-
-#ifdef HAVE_OPENCL
-    registerFunc("TCannyCL",
-                 "clip:clip;"
-                 "sigma:float[]:opt;"
-                 "sigma_v:float[]:opt;"
-                 "t_h:float:opt;"
-                 "t_l:float:opt;"
-                 "mode:int:opt;"
-                 "op:int:opt;"
-                 "gmmax:float:opt;"
-                 "device:int:opt;"
-                 "list_device:int:opt;"
-                 "info:int:opt;"
-                 "planes:int[]:opt;",
-                 tcannyclCreate, nullptr, plugin);
-#endif
 }

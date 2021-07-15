@@ -43,15 +43,6 @@ Usage
 
 * planes: Sets which planes will be processed. Any unprocessed planes will be simply copied.
 
----
-
-    tcanny.TCannyCL(clip clip[, float[] sigma=1.5, float[] sigma_v=sigma, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int device=-1, bint list_device=False, bint info=False, int[] planes=[0, 1, 2]])
-
-* device: Sets target OpenCL device. Use `list_device` to get the index of the available devices. By default the default device is selected.
-
-* list_device: Whether to draw the devices list on the frame.
-
-* info: Whether to draw the OpenCL-related info on the frame.
 
 [1]: Zhou, P., Ye, W., & Wang, Q. (2011). An Improved Canny Algorithm for Edge Detection. Journal of Computational Information Systems, 7(5), 1516-1523.
 
@@ -59,10 +50,7 @@ Usage
 Compilation
 ===========
 
-Requires `Boost` unless specify `-Dopencl=false`.
-
 ```
 meson build
-ninja -C build
 ninja -C build install
 ```
