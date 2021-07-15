@@ -1,30 +1,45 @@
 project('TCanny', 'cpp',
-  default_options : ['buildtype=release', 'b_ndebug=if-release', 'cpp_std=c++14'],
-  meson_version : '>=0.48.0',
-  version : '12'
+  default_options: ['buildtype=release', 'warning_level=2', 'b_lto=true', 'b_ndebug=if-release', 'cpp_std=c++17'],
+  license: 'GPL-2.0-or-later',
+  meson_version: '>=0.51.0',
+  version: '12'
 )
 
-add_project_arguments('-ffast-math', language : 'cpp')
+cxx = meson.get_compiler('cpp')
+
+gcc_syntax = cxx.get_argument_syntax() == 'gcc'
+
+if get_option('buildtype') == 'release'
+  add_project_arguments(gcc_syntax ? ['-fno-math-errno', '-fno-trapping-math'] : ['/GS-', '/fp:except-'], language: 'cpp')
+endif
+
+if gcc_syntax
+  vapoursynth_dep = dependency('vapoursynth').partial_dependency(compile_args: true, includes: true)
+  install_dir = vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth'
+else
+  vapoursynth_dep = dependency('', required: false)
+  install_dir = get_option('libdir') / 'vapoursynth'
+endif
 
 sources = [
   'TCanny/shared.hpp',
   'TCanny/TCanny.cpp',
-  'TCanny/TCanny.hpp',
-  'TCanny/vectorclass/instrset.h',
-  'TCanny/vectorclass/instrset_detect.cpp'
+  'TCanny/TCanny.hpp'
 ]
-
-vapoursynth_dep = dependency('vapoursynth').partial_dependency(compile_args : true, includes : true)
-
-deps = [vapoursynth_dep]
 
 libs = []
 
 if host_machine.cpu_family().startswith('x86')
-  add_project_arguments('-DVS_TARGET_CPU_X86', '-mfpmath=sse', '-msse2', language : 'cpp')
+  project_args = ['-DVS_TARGET_CPU_X86']
+  if gcc_syntax
+    project_args += ['-mfpmath=sse', '-msse2']
+  endif
+  add_project_arguments(project_args, language: 'cpp')
 
   sources += [
     'TCanny/TCanny_SSE2.cpp',
+    'TCanny/vectorclass/instrset.h',
+    'TCanny/vectorclass/instrset_detect.cpp',
     'TCanny/vectorclass/vectorclass.h',
     'TCanny/vectorclass/vectorf128.h',
     'TCanny/vectorclass/vectorf256.h',
@@ -37,22 +52,22 @@ if host_machine.cpu_family().startswith('x86')
   ]
 
   libs += static_library('avx', 'TCanny/TCanny_AVX.cpp',
-    dependencies : vapoursynth_dep,
-    cpp_args : ['-mavx'],
-    gnu_symbol_visibility : 'hidden'
+    cpp_args: gcc_syntax ? ['-mavx'] : ['/arch:AVX'],
+    dependencies: vapoursynth_dep,
+    gnu_symbol_visibility: 'hidden'
   )
 
   libs += static_library('avx2', 'TCanny/TCanny_AVX2.cpp',
-    dependencies : vapoursynth_dep,
-    cpp_args : ['-mavx2', '-mfma'],
-    gnu_symbol_visibility : 'hidden'
+    cpp_args: gcc_syntax ? ['-mavx2', '-mfma'] : ['/arch:AVX2'],
+    dependencies: vapoursynth_dep,
+    gnu_symbol_visibility: 'hidden'
   )
 endif
 
 shared_module('tcanny', sources,
-  dependencies : deps,
-  link_with : libs,
-  install : true,
-  install_dir : join_paths(vapoursynth_dep.get_pkgconfig_variable('libdir'), 'vapoursynth'),
-  gnu_symbol_visibility : 'hidden'
+  dependencies: vapoursynth_dep,
+  link_with: libs,
+  install: true,
+  install_dir: install_dir,
+  gnu_symbol_visibility: 'hidden'
 )
