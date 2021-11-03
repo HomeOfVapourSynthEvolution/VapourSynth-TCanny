@@ -14,18 +14,18 @@ static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const 
     weightsH += radiusH;
 
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto sum{ zero_8f() };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto sum{ zero_16f() };
 
             for (auto v{ 0 }; v < diameter; v++) {
                 if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                    auto srcp{ to_float(Vec8i().load_8uc(_srcp[v] + x)) };
+                    auto srcp{ to_float(Vec16i().load_16uc(_srcp[v] + x)) };
                     sum = mul_add(srcp, weightsV[v], sum);
                 } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                    auto srcp{ to_float(Vec8i().load_8us(_srcp[v] + x)) };
+                    auto srcp{ to_float(Vec16i().load_16us(_srcp[v] + x)) };
                     sum = mul_add(srcp, weightsV[v], sum);
                 } else {
-                    auto& srcp{ Vec8f().load_a(_srcp[v] + x) };
+                    auto& srcp{ Vec16f().load_a(_srcp[v] + x) };
                     sum = mul_add(srcp + offset, weightsV[v], sum);
                 }
             }
@@ -38,11 +38,11 @@ static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const 
             temp[width - 1 + i] = temp[width - 1 - i];
         }
 
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto sum{ zero_8f() };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto sum{ zero_16f() };
 
             for (auto v{ -radiusH }; v <= radiusH; v++) {
-                auto& srcp{ Vec8f().load(temp + x + v) };
+                auto& srcp{ Vec16f().load(temp + x + v) };
                 sum = mul_add(srcp, weightsH[v], sum);
             }
 
@@ -62,13 +62,13 @@ static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const 
     weights += radius;
 
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
             if constexpr (std::is_same_v<pixel_t, uint8_t>)
-                to_float(Vec8i().load_8uc(_srcp + x)).store_a(temp + x);
+                to_float(Vec16i().load_16uc(_srcp + x)).store_a(temp + x);
             else if constexpr (std::is_same_v<pixel_t, uint16_t>)
-                to_float(Vec8i().load_8us(_srcp + x)).store_a(temp + x);
+                to_float(Vec16i().load_16us(_srcp + x)).store_a(temp + x);
             else
-                (Vec8f().load_a(_srcp + x) + offset).store_a(temp + x);
+                (Vec16f().load_a(_srcp + x) + offset).store_a(temp + x);
         }
 
         for (auto i{ 1 }; i <= radius; i++) {
@@ -76,11 +76,11 @@ static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const 
             temp[width - 1 + i] = temp[width - 1 - i];
         }
 
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto sum{ zero_8f() };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto sum{ zero_16f() };
 
             for (auto v{ -radius }; v <= radius; v++) {
-                auto& srcp{ Vec8f().load(temp + x + v) };
+                auto& srcp{ Vec16f().load(temp + x + v) };
                 sum = mul_add(srcp, weights[v], sum);
             }
 
@@ -103,18 +103,18 @@ static void gaussianBlurV(const pixel_t* __srcp, float* dstp, const int width, c
         _srcp[radius - i] = _srcp[radius + i] = _srcp[radius] + srcStride * i;
 
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto sum{ zero_8f() };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto sum{ zero_16f() };
 
             for (auto v{ 0 }; v < diameter; v++) {
                 if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                    auto srcp{ to_float(Vec8i().load_8uc(_srcp[v] + x)) };
+                    auto srcp{ to_float(Vec16i().load_16uc(_srcp[v] + x)) };
                     sum = mul_add(srcp, weights[v], sum);
                 } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                    auto srcp{ to_float(Vec8i().load_8us(_srcp[v] + x)) };
+                    auto srcp{ to_float(Vec16i().load_16us(_srcp[v] + x)) };
                     sum = mul_add(srcp, weights[v], sum);
                 } else {
-                    auto& srcp{ Vec8f().load_a(_srcp[v] + x) };
+                    auto& srcp{ Vec16f().load_a(_srcp[v] + x) };
                     sum = mul_add(srcp + offset, weights[v], sum);
                 }
             }
@@ -133,13 +133,13 @@ template<typename pixel_t>
 static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const int height, const int srcStride, const int dstStride,
                       const float offset) noexcept {
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
             if constexpr (std::is_same_v<pixel_t, uint8_t>)
-                to_float(Vec8i().load_8uc(srcp + x)).store_nt(dstp + x);
+                to_float(Vec16i().load_16uc(srcp + x)).store_nt(dstp + x);
             else if constexpr (std::is_same_v<pixel_t, uint16_t>)
-                to_float(Vec8i().load_8us(srcp + x)).store_nt(dstp + x);
+                to_float(Vec16i().load_16us(srcp + x)).store_nt(dstp + x);
             else
-                (Vec8f().load_a(srcp + x) + offset).store_nt(dstp + x);
+                (Vec16f().load_a(srcp + x) + offset).store_nt(dstp + x);
         }
 
         srcp += srcStride;
@@ -160,17 +160,17 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
         next[-1] = next[1];
         next[width] = next[width - 2];
 
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto& topLeft{ Vec8f().load(prev + x - 1) };
-            auto& top{ Vec8f().load_a(prev + x) };
-            auto& topRight{ Vec8f().load(prev + x + 1) };
-            auto& left{ Vec8f().load(cur + x - 1) };
-            auto& right{ Vec8f().load(cur + x + 1) };
-            auto& bottomLeft{ Vec8f().load(next + x - 1) };
-            auto& bottom{ Vec8f().load_a(next + x) };
-            auto& bottomRight{ Vec8f().load(next + x + 1) };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto& topLeft{ Vec16f().load(prev + x - 1) };
+            auto& top{ Vec16f().load_a(prev + x) };
+            auto& topRight{ Vec16f().load(prev + x + 1) };
+            auto& left{ Vec16f().load(cur + x - 1) };
+            auto& right{ Vec16f().load(cur + x + 1) };
+            auto& bottomLeft{ Vec16f().load(next + x - 1) };
+            auto& bottom{ Vec16f().load_a(next + x) };
+            auto& bottomRight{ Vec16f().load(next + x + 1) };
 
-            Vec8f gx, gy;
+            Vec16f gx, gy;
 
             if (op == 0) {
                 gx = right - left;
@@ -193,7 +193,7 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
                 dr = if_add(dr < 0.0f, dr, M_PIF);
 
                 auto bin{ truncatei(mul_add(dr, 4.0f * M_1_PIF, 0.5f)) };
-                select(bin >= 4, zero_si256(), bin).store_nt(direction + x);
+                select(bin >= 4, zero_si512(), bin).store_nt(direction + x);
             }
         }
 
@@ -215,26 +215,26 @@ static void nonMaximumSuppression(const int* _direction, float* _gradient, float
     std::copy_n(_gradient - radiusAlign + bgStride * (height - 2), width + radiusAlign * 2, _gradient - radiusAlign + bgStride * height);
 
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto& direction{ Vec8i().load_a(_direction + x) };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto& direction{ Vec16i().load_a(_direction + x) };
 
-            auto mask{ Vec8fb(direction == 0) };
-            auto gradient{ max(Vec8f().load(_gradient + x + 1), Vec8f().load(_gradient + x - 1)) };
+            auto mask{ Vec16fb(direction == 0) };
+            auto gradient{ max(Vec16f().load(_gradient + x + 1), Vec16f().load(_gradient + x - 1)) };
             auto result{ gradient & mask };
 
-            mask = Vec8fb(direction == 1);
-            gradient = max(Vec8f().load(_gradient + x - bgStride + 1), Vec8f().load(_gradient + x + bgStride - 1));
+            mask = Vec16fb(direction == 1);
+            gradient = max(Vec16f().load(_gradient + x - bgStride + 1), Vec16f().load(_gradient + x + bgStride - 1));
             result |= gradient & mask;
 
-            mask = Vec8fb(direction == 2);
-            gradient = max(Vec8f().load_a(_gradient + x - bgStride), Vec8f().load_a(_gradient + x + bgStride));
+            mask = Vec16fb(direction == 2);
+            gradient = max(Vec16f().load_a(_gradient + x - bgStride), Vec16f().load_a(_gradient + x + bgStride));
             result |= gradient & mask;
 
-            mask = Vec8fb(direction == 3);
-            gradient = max(Vec8f().load(_gradient + x - bgStride - 1), Vec8f().load(_gradient + x + bgStride + 1));
+            mask = Vec16fb(direction == 3);
+            gradient = max(Vec16f().load(_gradient + x - bgStride - 1), Vec16f().load(_gradient + x + bgStride + 1));
             result |= gradient & mask;
 
-            gradient = Vec8f().load_a(_gradient + x);
+            gradient = Vec16f().load_a(_gradient + x);
             select(gradient >= result, gradient, fltLowest).store_nt(blur + x);
         }
 
@@ -248,14 +248,14 @@ template<typename pixel_t>
 static void outputGB(const float* _srcp, pixel_t* dstp, const int width, const int height, const int srcStride, const int dstStride,
                      const int peak, const float offset) noexcept {
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto& srcp{ Vec8f().load_a(_srcp + x) };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto& srcp{ Vec16f().load_a(_srcp + x) };
 
             if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                auto result{ compress_saturated_s2u(compress_saturated(truncatei(srcp + 0.5f), zero_si256()), zero_si256()).get_low() };
-                result.storel(dstp + x);
+                auto result{ compress_saturated_s2u(compress_saturated(truncatei(srcp + 0.5f), zero_si512()), zero_si512()).get_low().get_low() };
+                result.store_nt(dstp + x);
             } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                auto result{ compress_saturated_s2u(truncatei(srcp + 0.5f), zero_si256()).get_low() };
+                auto result{ compress_saturated_s2u(truncatei(srcp + 0.5f), zero_si512()).get_low() };
                 min(result, peak).store_nt(dstp + x);
             } else {
                 (srcp - offset).store_nt(dstp + x);
@@ -271,18 +271,18 @@ template<typename pixel_t>
 static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const int height, const int srcStride, const int dstStride,
                        const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto& srcp{ Vec8f().load_a(_srcp + x) };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto& srcp{ Vec16f().load_a(_srcp + x) };
 
             if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                auto mask{ Vec16cb(compress_saturated(compress_saturated(Vec8ib(srcp == fltMax), zero_si256()), zero_si256()).get_low()) };
-                select(mask, Vec16uc(255), zero_si128()).storel(dstp + x);
+                auto mask{ Vec16cb(srcp == fltMax) };
+                select(mask, Vec16uc(255), zero_si128()).store_nt(dstp + x);
             } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                auto mask{ Vec8sb(compress_saturated(Vec8ib(srcp == fltMax), zero_si256()).get_low()) };
-                select(mask, Vec8us(peak), zero_si128()).store_nt(dstp + x);
+                auto mask{ Vec16sb(srcp == fltMax) };
+                select(mask, Vec16us(peak), zero_si256()).store_nt(dstp + x);
             } else {
                 auto mask{ srcp == fltMax };
-                select(mask, Vec8f(1.0f), Vec8f(0.0f)).store_nt(dstp + x);
+                select(mask, Vec16f(1.0f), Vec16f(0.0f)).store_nt(dstp + x);
             }
         }
 
@@ -295,14 +295,14 @@ template<typename pixel_t>
 static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, const int height, const int srcStride, const int dstStride,
                          const float magnitude, const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec8f().size()) {
-            auto& srcp{ Vec8f().load_a(_srcp + x) };
+        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
+            auto& srcp{ Vec16f().load_a(_srcp + x) };
 
             if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                auto result{ compress_saturated_s2u(compress_saturated(truncatei(mul_add(srcp, magnitude, 0.5f)), zero_si256()), zero_si256()).get_low() };
-                result.storel(dstp + x);
+                auto result{ compress_saturated_s2u(compress_saturated(truncatei(mul_add(srcp, magnitude, 0.5f)), zero_si512()), zero_si512()).get_low().get_low() };
+                result.store_nt(dstp + x);
             } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                auto result{ compress_saturated_s2u(truncatei(mul_add(srcp, magnitude, 0.5f)), zero_si256()).get_low() };
+                auto result{ compress_saturated_s2u(truncatei(mul_add(srcp, magnitude, 0.5f)), zero_si512()).get_low() };
                 min(result, peak).store_nt(dstp + x);
             } else {
                 (srcp * magnitude).store_nt(dstp + x);
@@ -315,7 +315,7 @@ static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, con
 }
 
 template<typename pixel_t>
-void filter_avx2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept {
+void filter_avx512(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept {
     for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
             const auto width{ vsapi->getFrameWidth(src, plane) };
@@ -360,7 +360,7 @@ void filter_avx2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const
     }
 }
 
-template void filter_avx2<uint8_t>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
-template void filter_avx2<uint16_t>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
-template void filter_avx2<float>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template void filter_avx512<uint8_t>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template void filter_avx512<uint16_t>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template void filter_avx512<float>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
 #endif

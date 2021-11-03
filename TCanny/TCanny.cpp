@@ -19,19 +19,154 @@
 **   along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-#include "TCanny.hpp"
+#include <cmath>
 
-#ifdef VS_TARGET_CPU_X86
-template<typename T> extern void filter_sse2(const VSFrameRef *, VSFrameRef *, const TCannyData * const VS_RESTRICT, const VSAPI *) noexcept;
-template<typename T> extern void filter_avx(const VSFrameRef *, VSFrameRef *, const TCannyData * const VS_RESTRICT, const VSAPI *) noexcept;
-template<typename T> extern void filter_avx2(const VSFrameRef *, VSFrameRef *, const TCannyData * const VS_RESTRICT, const VSAPI *) noexcept;
+#include <string>
+
+#include "TCanny.h"
+
+using namespace std::literals;
+
+#ifdef TCANNY_X86
+template<typename pixel_t> extern void filter_sse2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template<typename pixel_t> extern void filter_avx2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template<typename pixel_t> extern void filter_avx512(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
 #endif
 
-template<typename T>
-static void copyPlane(const T * srcp, float * VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride, const float offset) noexcept {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            if (std::is_integral<T>::value)
+static auto gaussianWeights(const float sigma, int& radius) noexcept {
+    auto diameter{ std::max(static_cast<int>(sigma * 3.0f + 0.5f), 1) * 2 + 1 };
+    radius = diameter / 2;
+    auto weights{ new float[diameter]() };
+    auto sum{ 0.0f };
+
+    for (auto k{ -radius }; k <= radius; k++) {
+        auto w{ std::exp(-(k * k) / (2.0f * sigma * sigma)) };
+        weights[k + radius] = w;
+        sum += w;
+    }
+
+    for (auto k{ 0 }; k < diameter; k++)
+        weights[k] /= sum;
+
+    return weights;
+}
+
+template<typename pixel_t>
+static void gaussianBlur(const pixel_t* _srcp, float* VS_RESTRICT temp, float* VS_RESTRICT dstp, const int width, const int height, const int srcStride,
+                         const int dstStride, const int radiusH, const int radiusV, const float* weightsH, const float* weightsV, const float offset) noexcept {
+    auto diameter{ radiusV * 2 + 1 };
+    auto srcp{ std::make_unique<const pixel_t* []>(diameter) };
+
+    srcp[radiusV] = _srcp;
+    for (auto i{ 1 }; i <= radiusV; i++)
+        srcp[radiusV - i] = srcp[radiusV + i] = srcp[radiusV] + srcStride * i;
+
+    weightsH += radiusH;
+
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            auto sum{ 0.0f };
+
+            for (auto v{ 0 }; v < diameter; v++) {
+                if constexpr (std::is_integral_v<pixel_t>)
+                    sum += srcp[v][x] * weightsV[v];
+                else
+                    sum += (srcp[v][x] + offset) * weightsV[v];
+            }
+
+            temp[x] = sum;
+        }
+
+        for (auto i{ 1 }; i <= radiusH; i++) {
+            temp[-i] = temp[i];
+            temp[width - 1 + i] = temp[width - 1 - i];
+        }
+
+        for (auto x{ 0 }; x < width; x++) {
+            auto sum{ 0.0f };
+
+            for (auto v{ -radiusH }; v <= radiusH; v++)
+                sum += temp[x + v] * weightsH[v];
+
+            dstp[x] = sum;
+        }
+
+        for (auto i{ 0 }; i < diameter - 1; i++)
+            srcp[i] = srcp[i + 1];
+        srcp[diameter - 1] += (y < height - 1 - radiusV) ? srcStride : -srcStride;
+        dstp += dstStride;
+    }
+}
+
+template<typename pixel_t>
+static void gaussianBlurH(const pixel_t* srcp, float* VS_RESTRICT temp, float* VS_RESTRICT dstp, const int width, const int height,
+                          const int srcStride, const int dstStride, const int radius, const float* weights, const float offset) noexcept {
+    weights += radius;
+
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            if constexpr (std::is_integral_v<pixel_t>)
+                temp[x] = srcp[x];
+            else
+                temp[x] = srcp[x] + offset;
+        }
+
+        for (auto i{ 1 }; i <= radius; i++) {
+            temp[-i] = temp[i];
+            temp[width - 1 + i] = temp[width - 1 - i];
+        }
+
+        for (auto x{ 0 }; x < width; x++) {
+            auto sum{ 0.0f };
+
+            for (auto v{ -radius }; v <= radius; v++)
+                sum += temp[x + v] * weights[v];
+
+            dstp[x] = sum;
+        }
+
+        srcp += srcStride;
+        dstp += dstStride;
+    }
+}
+
+template<typename pixel_t>
+static void gaussianBlurV(const pixel_t* _srcp, float* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+                          const int radius, const float* weights, const float offset) noexcept {
+    auto diameter{ radius * 2 + 1 };
+    auto srcp{ std::make_unique<const pixel_t* []>(diameter) };
+
+    srcp[radius] = _srcp;
+    for (auto i{ 1 }; i <= radius; i++)
+        srcp[radius - i] = srcp[radius + i] = srcp[radius] + srcStride * i;
+
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            auto sum{ 0.0f };
+
+            for (auto v{ 0 }; v < diameter; v++) {
+                if constexpr (std::is_integral_v<pixel_t>)
+                    sum += srcp[v][x] * weights[v];
+                else
+                    sum += (srcp[v][x] + offset) * weights[v];
+            }
+
+            dstp[x] = sum;
+        }
+
+        for (auto i{ 0 }; i < diameter - 1; i++)
+            srcp[i] = srcp[i + 1];
+        srcp[diameter - 1] += (y < height - 1 - radius) ? srcStride : -srcStride;
+        dstp += dstStride;
+    }
+}
+
+template<typename pixel_t>
+static void copyPlane(const pixel_t* srcp, float* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+                      const float offset) noexcept {
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            if constexpr (std::is_integral_v<pixel_t>)
                 dstp[x] = srcp[x];
             else
                 dstp[x] = srcp[x] + offset;
@@ -42,195 +177,79 @@ static void copyPlane(const T * srcp, float * VS_RESTRICT dstp, const int width,
     }
 }
 
-template<typename T>
-static void gaussianBlur(const T * _srcp, float * VS_RESTRICT temp, float * VS_RESTRICT dstp, const float * weightsH, const float * weightsV, const int width, const int height,
-                         const int srcStride, const int dstStride, const int radiusH, const int radiusV, const float offset) noexcept {
-    const int diameter = radiusV * 2 + 1;
-    const T ** srcp = new const T *[diameter];
+static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int* VS_RESTRICT direction, const int width, const int height,
+                       const int stride, const int bgStride, const int mode, const int op) noexcept {
+    auto prev{ blur + bgStride };
+    auto cur{ blur };
+    auto next{ blur + bgStride };
 
-    srcp[radiusV] = _srcp;
-    for (int i = 1; i <= radiusV; i++) {
-        srcp[radiusV - i] = srcp[radiusV - 1 + i];
-        srcp[radiusV + i] = srcp[radiusV] + srcStride * i;
-    }
+    cur[-1] = cur[1];
+    cur[width] = cur[width - 2];
 
-    weightsH += radiusH;
+    for (auto y{ 0 }; y < height; y++) {
+        next[-1] = next[1];
+        next[width] = next[width - 2];
 
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
+        for (auto x{ 0 }; x < width; x++) {
+            auto topLeft{ prev[x - 1] };
+            auto top{ prev[x] };
+            auto topRight{ prev[x + 1] };
+            auto left{ cur[x - 1] };
+            auto right{ cur[x + 1] };
+            auto bottomLeft{ next[x - 1] };
+            auto bottom{ next[x] };
+            auto bottomRight{ next[x + 1] };
 
-            for (int i = 0; i < diameter; i++) {
-                if (std::is_integral<T>::value)
-                    sum += srcp[i][x] * weightsV[i];
-                else
-                    sum += (srcp[i][x] + offset) * weightsV[i];
-            }
-
-            temp[x] = sum;
-        }
-
-        for (int i = 1; i <= radiusH; i++) {
-            temp[-i] = temp[-1 + i];
-            temp[width - 1 + i] = temp[width - i];
-        }
-
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
-
-            for (int i = -radiusH; i <= radiusH; i++)
-                sum += temp[x + i] * weightsH[i];
-
-            dstp[x] = sum;
-        }
-
-        for (int i = 0; i < diameter - 1; i++)
-            srcp[i] = srcp[i + 1];
-        if (y < height - 1 - radiusV)
-            srcp[diameter - 1] += srcStride;
-        else if (y > height - 1 - radiusV)
-            srcp[diameter - 1] -= srcStride;
-        dstp += dstStride;
-    }
-
-    delete[] srcp;
-}
-
-template<typename T>
-static void gaussianBlurV(const T * _srcp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height, const int srcStride, const int dstStride,
-                          const int radius, const float offset) noexcept {
-    const int diameter = radius * 2 + 1;
-    const T ** srcp = new const T *[diameter];
-
-    srcp[radius] = _srcp;
-    for (int i = 1; i <= radius; i++) {
-        srcp[radius - i] = srcp[radius - 1 + i];
-        srcp[radius + i] = srcp[radius] + srcStride * i;
-    }
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
-
-            for (int i = 0; i < diameter; i++) {
-                if (std::is_integral<T>::value)
-                    sum += srcp[i][x] * weights[i];
-                else
-                    sum += (srcp[i][x] + offset) * weights[i];
-            }
-
-            dstp[x] = sum;
-        }
-
-        for (int i = 0; i < diameter - 1; i++)
-            srcp[i] = srcp[i + 1];
-        if (y < height - 1 - radius)
-            srcp[diameter - 1] += srcStride;
-        else if (y > height - 1 - radius)
-            srcp[diameter - 1] -= srcStride;
-        dstp += dstStride;
-    }
-
-    delete[] srcp;
-}
-
-template<typename T>
-static void gaussianBlurH(const T * srcp, float * VS_RESTRICT temp, float * VS_RESTRICT dstp, const float * weights, const int width, const int height,
-                          const int srcStride, const int dstStride, const int radius, const float offset) noexcept {
-    weights += radius;
-
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            if (std::is_integral<T>::value)
-                temp[x] = srcp[x];
-            else
-                temp[x] = srcp[x] + offset;
-        }
-
-        for (int i = 1; i <= radius; i++) {
-            temp[-i] = temp[-1 + i];
-            temp[width - 1 + i] = temp[width - i];
-        }
-
-        for (int x = 0; x < width; x++) {
-            float sum = 0.f;
-
-            for (int i = -radius; i <= radius; i++)
-                sum += temp[x + i] * weights[i];
-
-            dstp[x] = sum;
-        }
-
-        srcp += srcStride;
-        dstp += dstStride;
-    }
-}
-
-static void detectEdge(float * blur, float * VS_RESTRICT gradient, unsigned * VS_RESTRICT direction, const int width, const int height, const int stride, const int bgStride,
-                       const int mode, const int op) noexcept {
-    float * VS_RESTRICT srcpp = blur;
-    float * VS_RESTRICT srcp = blur;
-    float * VS_RESTRICT srcpn = blur + bgStride;
-
-    srcp[-1] = srcp[0];
-    srcp[width] = srcp[width - 1];
-
-    for (int y = 0; y < height; y++) {
-        srcpn[-1] = srcpn[0];
-        srcpn[width] = srcpn[width - 1];
-
-        for (int x = 0; x < width; x++) {
             float gx, gy;
 
             if (op == 0) {
-                gx = srcp[x + 1] - srcp[x - 1];
-                gy = srcpp[x] - srcpn[x];
+                gx = right - left;
+                gy = top - bottom;
             } else if (op == 1) {
-                gx = (srcpp[x + 1] + srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - srcp[x - 1] - srcpn[x - 1]) / 2.f;
-                gy = (srcpp[x - 1] + srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - srcpn[x] - srcpn[x + 1]) / 2.f;
+                gx = (topRight + right + bottomRight - topLeft - left - bottomLeft) / 2.0f;
+                gy = (topLeft + top + topRight - bottomLeft - bottom - bottomRight) / 2.0f;
             } else if (op == 2) {
-                gx = srcpp[x + 1] + 2.f * srcp[x + 1] + srcpn[x + 1] - srcpp[x - 1] - 2.f * srcp[x - 1] - srcpn[x - 1];
-                gy = srcpp[x - 1] + 2.f * srcpp[x] + srcpp[x + 1] - srcpn[x - 1] - 2.f * srcpn[x] - srcpn[x + 1];
+                gx = topRight + 2.0f * right + bottomRight - topLeft - 2.0f * left - bottomLeft;
+                gy = topLeft + 2.0f * top + topRight - bottomLeft - 2.0f * bottom - bottomRight;
             } else {
-                gx = 3.f * srcpp[x + 1] + 10.f * srcp[x + 1] + 3.f * srcpn[x + 1] - 3.f * srcpp[x - 1] - 10.f * srcp[x - 1] - 3.f * srcpn[x - 1];
-                gy = 3.f * srcpp[x - 1] + 10.f * srcpp[x] + 3.f * srcpp[x + 1] - 3.f * srcpn[x - 1] - 10.f * srcpn[x] - 3.f * srcpn[x + 1];
+                gx = 3.0f * topRight + 10.0f * right + 3.0f * bottomRight - 3.0f * topLeft - 10.0f * left - 3.0f * bottomLeft;
+                gy = 3.0f * topLeft + 10.0f * top + 3.0f * topRight - 3.0f * bottomLeft - 10.0f * bottom - 3.0f * bottomRight;
             }
 
             gradient[x] = std::sqrt(gx * gx + gy * gy);
 
             if (mode == 0) {
-                float dr = std::atan2(gy, gx);
-                if (dr < 0.f)
+                auto dr{ std::atan2(gy, gx) };
+                if (dr < 0.0f)
                     dr += M_PIF;
 
-                const unsigned bin = static_cast<unsigned>(dr * 4.f * M_1_PIF + 0.5f);
+                auto bin{ static_cast<int>(dr * 4.0f * M_1_PIF + 0.5f) };
                 direction[x] = (bin >= 4) ? 0 : bin;
             }
         }
 
-        srcpp = srcp;
-        srcp = srcpn;
-        if (y < height - 2)
-            srcpn += bgStride;
+        prev = cur;
+        cur = next;
+        next += (y < height - 2) ? bgStride : -bgStride;
         gradient += bgStride;
         direction += stride;
     }
 }
 
-static void nonMaximumSuppression(const unsigned * direction, float * VS_RESTRICT gradient, float * VS_RESTRICT blur, const int width, const int height,
+static void nonMaximumSuppression(const int* direction, float* VS_RESTRICT gradient, float* VS_RESTRICT blur, const int width, const int height,
                                   const int stride, const int bgStride, const int radiusAlign) noexcept {
-    const int offsets[] = { 1, -bgStride + 1, -bgStride, -bgStride - 1 };
+    const int offsets[]{ 1, -bgStride + 1, -bgStride, -bgStride - 1 };
 
-    gradient[-1] = gradient[0];
-    gradient[-1 + bgStride * (height - 1)] = gradient[bgStride * (height - 1)];
-    gradient[width] = gradient[width - 1];
-    gradient[width + bgStride * (height - 1)] = gradient[width - 1 + bgStride * (height - 1)];
-    std::copy_n(gradient - radiusAlign, width + radiusAlign * 2, gradient - radiusAlign - bgStride);
-    std::copy_n(gradient - radiusAlign + bgStride * (height - 1), width + radiusAlign * 2, gradient - radiusAlign + bgStride * height);
+    gradient[-1] = gradient[1];
+    gradient[-1 + bgStride * (height - 1)] = gradient[1 + bgStride * (height - 1)];
+    gradient[width] = gradient[width - 2];
+    gradient[width + bgStride * (height - 1)] = gradient[width - 2 + bgStride * (height - 1)];
+    std::copy_n(gradient - radiusAlign + bgStride, width + radiusAlign * 2, gradient - radiusAlign - bgStride);
+    std::copy_n(gradient - radiusAlign + bgStride * (height - 2), width + radiusAlign * 2, gradient - radiusAlign + bgStride * height);
 
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            const int offset = offsets[direction[x]];
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            auto offset{ offsets[direction[x]] };
             blur[x] = (gradient[x] >= std::max(gradient[x + offset], gradient[x - offset])) ? gradient[x] : fltLowest;
         }
 
@@ -240,13 +259,13 @@ static void nonMaximumSuppression(const unsigned * direction, float * VS_RESTRIC
     }
 }
 
-template<typename T>
-static void outputGB(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
-                     const uint16_t peak, const float offset) noexcept {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            if (std::is_integral<T>::value)
-                dstp[x] = std::min<unsigned>(srcp[x] + 0.5f, peak);
+template<typename pixel_t>
+static void outputGB(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+                     const int peak, const float offset) noexcept {
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            if constexpr (std::is_integral_v<pixel_t>)
+                dstp[x] = static_cast<pixel_t>(std::min(static_cast<int>(srcp[x] + 0.5f), peak));
             else
                 dstp[x] = srcp[x] - offset;
         }
@@ -256,13 +275,13 @@ static void outputGB(const float * srcp, T * VS_RESTRICT dstp, const int width, 
     }
 }
 
-template<typename T>
-static void binarizeCE(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
-                       const uint16_t peak) noexcept {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            if (std::is_integral<T>::value)
-                dstp[x] = (srcp[x] == fltMax) ? peak : 0;
+template<typename pixel_t>
+static void binarizeCE(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+                       const int peak) noexcept {
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            if constexpr (std::is_integral_v<pixel_t>)
+                dstp[x] = (srcp[x] == fltMax) ? static_cast<pixel_t>(peak) : 0;
             else
                 dstp[x] = (srcp[x] == fltMax) ? 1.0f : 0.0f;
         }
@@ -272,13 +291,13 @@ static void binarizeCE(const float * srcp, T * VS_RESTRICT dstp, const int width
     }
 }
 
-template<typename T>
-static void discretizeGM(const float * srcp, T * VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
-                         const float magnitude, const uint16_t peak) noexcept {
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            if (std::is_integral<T>::value)
-                dstp[x] = std::min<unsigned>(srcp[x] * magnitude + 0.5f, peak);
+template<typename pixel_t>
+static void discretizeGM(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+                         const float magnitude, const int peak) noexcept {
+    for (auto y{ 0 }; y < height; y++) {
+        for (auto x{ 0 }; x < width; x++) {
+            if constexpr (std::is_integral_v<pixel_t>)
+                dstp[x] = static_cast<pixel_t>(std::min(static_cast<int>(srcp[x] * magnitude + 0.5f), peak));
             else
                 dstp[x] = srcp[x] * magnitude;
         }
@@ -288,29 +307,30 @@ static void discretizeGM(const float * srcp, T * VS_RESTRICT dstp, const int wid
     }
 }
 
-template<typename T>
-static void filter_c(const VSFrameRef * src, VSFrameRef * dst, const TCannyData * const VS_RESTRICT d, const VSAPI * vsapi) noexcept {
-    for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
+template<typename pixel_t>
+static void filter_c(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept {
+    for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++) {
         if (d->process[plane]) {
-            const int width = vsapi->getFrameWidth(src, plane);
-            const int height = vsapi->getFrameHeight(src, plane);
-            const int stride = vsapi->getStride(src, plane) / sizeof(T);
-            const int bgStride = stride + d->radiusAlign * 2;
-            const T * srcp = reinterpret_cast<const T *>(vsapi->getReadPtr(src, plane));
-            T * dstp = reinterpret_cast<T *>(vsapi->getWritePtr(dst, plane));
+            const auto width{ vsapi->getFrameWidth(src, plane) };
+            const auto height{ vsapi->getFrameHeight(src, plane) };
+            const auto stride{ vsapi->getStride(src, plane) / d->vi->format->bytesPerSample };
+            const auto bgStride{ stride + d->radiusAlign * 2 };
+            auto srcp{ reinterpret_cast<const pixel_t*>(vsapi->getReadPtr(src, plane)) };
+            auto dstp{ reinterpret_cast<pixel_t*>(vsapi->getWritePtr(dst, plane)) };
 
-            const auto threadId = std::this_thread::get_id();
-            float * blur = d->blur.at(threadId) + d->radiusAlign;
-            float * gradient = d->gradient.at(threadId) + bgStride + d->radiusAlign;
-            unsigned * direction = d->direction.at(threadId);
-            bool * found = d->found.at(threadId);
+            const auto threadId{ std::this_thread::get_id() };
+            auto blur{ d->blur.at(threadId).get() + d->radiusAlign };
+            auto gradient{ d->gradient.at(threadId).get() + bgStride + d->radiusAlign };
+            auto direction{ d->direction.at(threadId).get() };
+            auto found{ d->found.at(threadId).get() };
 
-            if (d->radiusV[plane] && d->radiusH[plane])
-                gaussianBlur(srcp, gradient, blur, d->weightsH[plane], d->weightsV[plane], width, height, stride, bgStride, d->radiusH[plane], d->radiusV[plane], d->offset[plane]);
-            else if (d->radiusV[plane])
-                gaussianBlurV(srcp, blur, d->weightsV[plane], width, height, stride, bgStride, d->radiusV[plane], d->offset[plane]);
+            if (d->radiusH[plane] && d->radiusV[plane])
+                gaussianBlur(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->radiusV[plane],
+                             d->weightsH[plane].get(), d->weightsV[plane].get(), d->offset[plane]);
             else if (d->radiusH[plane])
-                gaussianBlurH(srcp, gradient, blur, d->weightsH[plane], width, height, stride, bgStride, d->radiusH[plane], d->offset[plane]);
+                gaussianBlurH(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->weightsH[plane].get(), d->offset[plane]);
+            else if (d->radiusV[plane])
+                gaussianBlurV(srcp, blur, width, height, stride, bgStride, d->radiusV[plane], d->weightsV[plane].get(), d->offset[plane]);
             else
                 copyPlane(srcp, blur, width, height, stride, bgStride, d->offset[plane]);
 
@@ -333,108 +353,52 @@ static void filter_c(const VSFrameRef * src, VSFrameRef * dst, const TCannyData 
     }
 }
 
-static void selectFunctions(const unsigned opt, TCannyData * d) noexcept {
-    d->vectorSize = 1;
-    d->alignment = 4;
-
-#ifdef VS_TARGET_CPU_X86
-    const int iset = instrset_detect();
-
-    if ((opt == 0 && iset >= 7) || opt >= 3) {
-        d->vectorSize = 8;
-        d->alignment = 32;
-    } else if ((opt == 0 && iset >= 2) || opt == 2) {
-        d->vectorSize = 4;
-        d->alignment = 16;
-    }
-#endif
-
-    if (d->vi->format->bytesPerSample == 1) {
-        d->filter = filter_c<uint8_t>;
-
-#ifdef VS_TARGET_CPU_X86
-        if ((opt == 0 && iset >= 8) || opt == 4)
-            d->filter = filter_avx2<uint8_t>;
-        else if ((opt == 0 && iset == 7) || opt == 3)
-            d->filter = filter_avx<uint8_t>;
-        else if ((opt == 0 && iset >= 2) || opt == 2)
-            d->filter = filter_sse2<uint8_t>;
-#endif
-    } else if (d->vi->format->bytesPerSample == 2) {
-        d->filter = filter_c<uint16_t>;
-
-#ifdef VS_TARGET_CPU_X86
-        if ((opt == 0 && iset >= 8) || opt == 4)
-            d->filter = filter_avx2<uint16_t>;
-        else if ((opt == 0 && iset == 7) || opt == 3)
-            d->filter = filter_avx<uint16_t>;
-        else if ((opt == 0 && iset >= 2) || opt == 2)
-            d->filter = filter_sse2<uint16_t>;
-#endif
-    } else {
-        d->filter = filter_c<float>;
-
-#ifdef VS_TARGET_CPU_X86
-        if ((opt == 0 && iset >= 8) || opt == 4)
-            d->filter = filter_avx2<float>;
-        else if ((opt == 0 && iset == 7) || opt == 3)
-            d->filter = filter_avx<float>;
-        else if ((opt == 0 && iset >= 2) || opt == 2)
-            d->filter = filter_sse2<float>;
-#endif
-    }
-}
-
-static void VS_CC tcannyInit(VSMap *in, VSMap *out, void **instanceData, VSNode *node, VSCore *core, const VSAPI *vsapi) {
-    TCannyData * d = static_cast<TCannyData *>(*instanceData);
+static void VS_CC tcannyInit([[maybe_unused]] VSMap* in, [[maybe_unused]] VSMap* out, void** instanceData, VSNode* node, [[maybe_unused]] VSCore* core, const VSAPI* vsapi) {
+    auto d{ static_cast<TCannyData*>(*instanceData) };
     vsapi->setVideoInfo(d->vi, 1, node);
 }
 
-static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void **instanceData, void **frameData, VSFrameContext *frameCtx, VSCore *core, const VSAPI *vsapi) {
-    TCannyData * d = static_cast<TCannyData *>(*instanceData);
+static const VSFrameRef* VS_CC tcannyGetFrame(int n, int activationReason, void** instanceData, [[maybe_unused]] void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+    auto d{ static_cast<TCannyData*>(*instanceData) };
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
-#ifdef VS_TARGET_CPU_X86
-        no_subnormals();
-#endif
-
-        const VSFrameRef * src = vsapi->getFrameFilter(n, d->node, frameCtx);
-        const VSFrameRef * fr[] = { d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
-        const int pl[] = { 0, 1, 2 };
-        VSFrameRef * dst = vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core);
+        auto src{ vsapi->getFrameFilter(n, d->node, frameCtx) };
+        const VSFrameRef* fr[]{ d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
+        const int pl[]{ 0, 1, 2 };
+        auto dst{ vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core) };
 
         try {
-            auto threadId = std::this_thread::get_id();
+            auto threadId{ std::this_thread::get_id() };
 
             if (!d->blur.count(threadId)) {
-                float * blur = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + d->radiusAlign * 2) * d->vi->height * sizeof(float), d->alignment);
+                auto blur{ vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + d->radiusAlign * 2) * d->vi->height * sizeof(float), d->alignment) };
                 if (!blur)
-                    throw std::string{ "malloc failure (blur)" };
-                d->blur.emplace(threadId, blur);
+                    throw "malloc failure (blur)"s;
+                d->blur.emplace(threadId, unique_float{ blur, vs_aligned_free });
 
-                float * gradient = vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + d->radiusAlign * 2) * (d->vi->height + 2) * sizeof(float), d->alignment);
+                auto gradient{ vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + d->radiusAlign * 2) * (d->vi->height + 2) * sizeof(float), d->alignment) };
                 if (!gradient)
-                    throw std::string{ "malloc failure (gradient)" };
-                d->gradient.emplace(threadId, gradient);
+                    throw "malloc failure (gradient)"s;
+                d->gradient.emplace(threadId, unique_float{ gradient, vs_aligned_free });
 
                 if (d->mode == 0) {
-                    unsigned * direction = vs_aligned_malloc<unsigned>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(unsigned), d->alignment);
+                    auto direction{ vs_aligned_malloc<int>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(int), d->alignment) };
                     if (!direction)
-                        throw std::string{ "malloc failure (direction)" };
-                    d->direction.emplace(threadId, direction);
+                        throw "malloc failure (direction)"s;
+                    d->direction.emplace(threadId, unique_int{ direction, vs_aligned_free });
 
-                    bool * found = new (std::nothrow) bool[d->vi->width * d->vi->height];
+                    auto found{ new (std::nothrow) bool[d->vi->width * d->vi->height] };
                     if (!found)
-                        throw std::string{ "malloc failure (found)" };
+                        throw "malloc failure (found)"s;
                     d->found.emplace(threadId, found);
                 } else {
-                    d->direction.emplace(threadId, nullptr);
+                    d->direction.emplace(threadId, unique_int{ nullptr, vs_aligned_free });
                     d->found.emplace(threadId, nullptr);
                 }
             }
-        } catch (const std::string & error) {
+        } catch (const std::string& error) {
             vsapi->setFilterError(("TCanny: " + error).c_str(), frameCtx);
             vsapi->freeFrame(src);
             vsapi->freeFrame(dst);
@@ -450,58 +414,39 @@ static const VSFrameRef *VS_CC tcannyGetFrame(int n, int activationReason, void 
     return nullptr;
 }
 
-static void VS_CC tcannyFree(void *instanceData, VSCore *core, const VSAPI *vsapi) {
-    TCannyData * d = static_cast<TCannyData *>(instanceData);
-
+static void VS_CC tcannyFree(void* instanceData, [[maybe_unused]] VSCore* core, const VSAPI* vsapi) {
+    auto d{ static_cast<TCannyData*>(instanceData) };
     vsapi->freeNode(d->node);
-
-    for (int i = 0; i < 3; i++) {
-        delete[] d->weightsH[i];
-        delete[] d->weightsV[i];
-    }
-
-    for (auto & iter : d->blur)
-        vs_aligned_free(iter.second);
-
-    for (auto & iter : d->gradient)
-        vs_aligned_free(iter.second);
-
-    for (auto & iter : d->direction)
-        vs_aligned_free(iter.second);
-
-    for (auto & iter : d->found)
-        delete[] iter.second;
-
     delete d;
 }
 
-static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCore *core, const VSAPI *vsapi) {
-    std::unique_ptr<TCannyData> d = std::make_unique<TCannyData>();
-    int err;
-
-    d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
-    d->vi = vsapi->getVideoInfo(d->node);
+static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] void* userData, VSCore* core, const VSAPI* vsapi) {
+    auto d{ std::make_unique<TCannyData>() };
 
     try {
+        d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
+        d->vi = vsapi->getVideoInfo(d->node);
+        auto err{ 0 };
+
         if (!isConstantFormat(d->vi) ||
             (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
             (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
-            throw std::string{ "only constant format 8-16 bit integer and 32 bit float input supported" };
+            throw "only constant format 8-16 bit integer and 32 bit float input supported"s;
 
         if (d->vi->height < 2)
-            throw std::string{ "the clip's height must be greater than or equal to 2" };
+            throw "clip's height must be at least 2"s;
 
-        const int numSigmaH = vsapi->propNumElements(in, "sigma");
+        const auto numSigmaH{ vsapi->propNumElements(in, "sigma") };
         if (numSigmaH > d->vi->format->numPlanes)
-            throw std::string{ "more sigma given than there are planes" };
+            throw "more sigma given than there are planes"s;
 
-        const int numSigmaV = vsapi->propNumElements(in, "sigma_v");
+        const auto numSigmaV{ vsapi->propNumElements(in, "sigma_v") };
         if (numSigmaV > d->vi->format->numPlanes)
-            throw std::string{ "more sigma_v given than there are planes" };
+            throw "more sigma_v given than there are planes"s;
 
-        float sigmaH[3], sigmaV[3];
+        float sigmaH[3]{}, sigmaV[3]{};
 
-        for (int i = 0; i < 3; i++) {
+        for (auto i{ 0 }; i < d->vi->format->numPlanes; i++) {
             if (i < numSigmaH)
                 sigmaH[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
             else if (i == 0)
@@ -525,11 +470,11 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
 
         d->t_h = static_cast<float>(vsapi->propGetFloat(in, "t_h", 0, &err));
         if (err)
-            d->t_h = 8.f;
+            d->t_h = 8.0f;
 
         d->t_l = static_cast<float>(vsapi->propGetFloat(in, "t_l", 0, &err));
         if (err)
-            d->t_l = 1.f;
+            d->t_l = 1.0f;
 
         d->mode = int64ToIntS(vsapi->propGetInt(in, "mode", 0, &err));
 
@@ -537,119 +482,165 @@ static void VS_CC tcannyCreate(const VSMap *in, VSMap *out, void *userData, VSCo
         if (err)
             d->op = 1;
 
-        float gmmax = static_cast<float>(vsapi->propGetFloat(in, "gmmax", 0, &err));
+        auto gmmax{ static_cast<float>(vsapi->propGetFloat(in, "gmmax", 0, &err)) };
         if (err)
-            gmmax = 50.f;
+            gmmax = 50.0f;
 
-        const int opt = int64ToIntS(vsapi->propGetInt(in, "opt", 0, &err));
+        auto opt{ int64ToIntS(vsapi->propGetInt(in, "opt", 0, &err)) };
 
-        const int m = vsapi->propNumElements(in, "planes");
+        const auto m{ vsapi->propNumElements(in, "planes") };
 
-        for (int i = 0; i < 3; i++)
+        for (auto i{ 0 }; i < 3; i++)
             d->process[i] = (m <= 0);
 
-        for (int i = 0; i < m; i++) {
-            const int n = int64ToIntS(vsapi->propGetInt(in, "planes", i, nullptr));
+        for (auto i{ 0 }; i < m; i++) {
+            auto n{ int64ToIntS(vsapi->propGetInt(in, "planes", i, nullptr)) };
 
             if (n < 0 || n >= d->vi->format->numPlanes)
-                throw std::string{ "plane index out of range" };
+                throw "plane index out of range"s;
 
             if (d->process[n])
-                throw std::string{ "plane specified twice" };
+                throw "plane specified twice"s;
 
             d->process[n] = true;
         }
 
-        for (int i = 0; i < 3; i++) {
-            if (sigmaH[i] < 0.f)
-                throw std::string{ "sigma must be greater than or equal to 0.0" };
+        for (auto i{ 0 }; i < d->vi->format->numPlanes; i++) {
+            if (sigmaH[i] < 0.0f)
+                throw "sigma must be greater than or equal to 0.0"s;
 
-            if (sigmaV[i] < 0.f)
-                throw std::string{ "sigma_v must be greater than or equal to 0.0" };
+            if (sigmaV[i] < 0.0f)
+                throw "sigma_v must be greater than or equal to 0.0"s;
         }
 
         if (d->t_l >= d->t_h)
-            throw std::string{ "t_h must be greater than t_l" };
+            throw "t_h must be greater than t_l"s;
 
         if (d->mode < -1 || d->mode > 1)
-            throw std::string{ "mode must be -1, 0, or 1" };
+            throw "mode must be -1, 0, or 1"s;
 
         if (d->op < 0 || d->op > 3)
-            throw std::string{ "op must be 0, 1, 2, or 3" };
+            throw "op must be 0, 1, 2, or 3"s;
 
-        if (gmmax < 1.f)
-            throw std::string{ "gmmax must be greater than or equal to 1.0" };
+        if (gmmax < 1.0f)
+            throw "gmmax must be greater than or equal to 1.0"s;
 
         if (opt < 0 || opt > 4)
-            throw std::string{ "opt must be 0, 1, 2, 3, or 4" };
+            throw "opt must be 0, 1, 2, 3, or 4"s;
 
-        const unsigned numThreads = vsapi->getCoreInfo(core)->numThreads;
+        auto vectorSize{ 1 };
+        {
+            d->alignment = 4;
+
+#ifdef TCANNY_X86
+            const auto iset{ instrset_detect() };
+
+            if ((opt == 0 && iset >= 10) || opt == 4) {
+                vectorSize = 16;
+                d->alignment = 64;
+            } else if ((opt == 0 && iset >= 8) || opt == 3) {
+                vectorSize = 8;
+                d->alignment = 32;
+            } else if ((opt == 0 && iset >= 2) || opt == 2) {
+                vectorSize = 4;
+                d->alignment = 16;
+            }
+#endif
+
+            if (d->vi->format->bytesPerSample == 1) {
+                d->filter = filter_c<uint8_t>;
+
+#ifdef TCANNY_X86
+                if ((opt == 0 && iset >= 10) || opt == 4)
+                    d->filter = filter_avx512<uint8_t>;
+                else if ((opt == 0 && iset >= 8) || opt == 3)
+                    d->filter = filter_avx2<uint8_t>;
+                else if ((opt == 0 && iset >= 2) || opt == 2)
+                    d->filter = filter_sse2<uint8_t>;
+#endif
+            } else if (d->vi->format->bytesPerSample == 2) {
+                d->filter = filter_c<uint16_t>;
+
+#ifdef TCANNY_X86
+                if ((opt == 0 && iset >= 10) || opt == 4)
+                    d->filter = filter_avx512<uint16_t>;
+                else if ((opt == 0 && iset >= 8) || opt == 3)
+                    d->filter = filter_avx2<uint16_t>;
+                else if ((opt == 0 && iset >= 2) || opt == 2)
+                    d->filter = filter_sse2<uint16_t>;
+#endif
+            } else {
+                d->filter = filter_c<float>;
+
+#ifdef TCANNY_X86
+                if ((opt == 0 && iset >= 10) || opt == 4)
+                    d->filter = filter_avx512<float>;
+                else if ((opt == 0 && iset >= 8) || opt == 3)
+                    d->filter = filter_avx2<float>;
+                else if ((opt == 0 && iset >= 2) || opt == 2)
+                    d->filter = filter_sse2<float>;
+#endif
+            }
+        }
+
+        const auto numThreads{ vsapi->getCoreInfo(core)->numThreads };
         d->blur.reserve(numThreads);
         d->gradient.reserve(numThreads);
         d->direction.reserve(numThreads);
         d->found.reserve(numThreads);
 
-        selectFunctions(opt, d.get());
-
         if (d->vi->format->sampleType == stInteger) {
             d->peak = (1 << d->vi->format->bitsPerSample) - 1;
-            const float scale = d->peak / 255.f;
+            auto scale{ d->peak / 255.0f };
             d->t_h *= scale;
             d->t_l *= scale;
         } else {
-            d->t_h /= 255.f;
-            d->t_l /= 255.f;
+            d->t_h /= 255.0f;
+            d->t_l /= 255.0f;
 
-            for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
-                if (plane == 0 || d->vi->format->colorFamily == cmRGB)
-                    d->offset[plane] = 0.f;
-                else
-                    d->offset[plane] = 0.5f;
-            }
+            for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++)
+                d->offset[plane] = (plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.0f : 0.5f;
         }
 
-        for (int plane = 0; plane < d->vi->format->numPlanes; plane++) {
+        for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++) {
             if (d->process[plane]) {
-                if (sigmaH[plane]) {
-                    d->weightsH[plane] = gaussianWeights(sigmaH[plane], d->radiusH[plane]);
-                    if (!d->weightsH[plane])
-                        throw std::string{ "malloc failure (weightsH)" };
+                auto planeOrder{ plane == 0 ? "first" : (plane == 1 ? "second" : "third") };
 
-                    const int width = d->vi->width >> (plane ? d->vi->format->subSamplingW : 0);
-                    const std::string planeOrder{ plane == 0 ? "first" : (plane == 1 ? "second" : "third") };
+                if (sigmaH[plane]) {
+                    d->weightsH[plane].reset(gaussianWeights(sigmaH[plane], d->radiusH[plane]));
+
+                    auto width{ d->vi->width >> (plane ? d->vi->format->subSamplingW : 0) };
                     if (width < d->radiusH[plane] + 1)
-                        throw std::string{ "the " + planeOrder + " plane's width must be greater than or equal to " + std::to_string(d->radiusH[plane] + 1) + " for specified sigma" };
+                        throw "the "s + planeOrder + " plane's width must be at least " + std::to_string(d->radiusH[plane] + 1) + " for specified sigma";
                 }
 
                 if (sigmaV[plane]) {
-                    d->weightsV[plane] = gaussianWeights(sigmaV[plane], d->radiusV[plane]);
-                    if (!d->weightsV[plane])
-                        throw std::string{ "malloc failure (weightsV)" };
+                    d->weightsV[plane].reset(gaussianWeights(sigmaV[plane], d->radiusV[plane]));
 
-                    const int height = d->vi->height >> (plane ? d->vi->format->subSamplingH : 0);
-                    const std::string planeOrder{ plane == 0 ? "first" : (plane == 1 ? "second" : "third") };
+                    auto height{ d->vi->height >> (plane ? d->vi->format->subSamplingH : 0) };
                     if (height < d->radiusV[plane] + 1)
-                        throw std::string{ "the " + planeOrder + " plane's height must be greater than or equal to " + std::to_string(d->radiusV[plane] + 1) + " for specified sigma_v" };
+                        throw "the "s + planeOrder + " plane's height must be at least " + std::to_string(d->radiusV[plane] + 1) + " for specified sigma_v";
                 }
             }
         }
 
-        d->radiusAlign = (std::max({ d->radiusH[0], d->radiusH[1], d->radiusH[2], 1 }) + d->vectorSize - 1) & -d->vectorSize;
+        d->radiusAlign = (std::max({ d->radiusH[0], d->radiusH[1], d->radiusH[2], 1 }) + vectorSize - 1) & ~(vectorSize - 1);
 
-        d->magnitude = 255.f / gmmax;
-    } catch (const std::string & error) {
+        d->magnitude = 255.0f / gmmax;
+    } catch (const std::string& error) {
         vsapi->setError(out, ("TCanny: " + error).c_str());
         vsapi->freeNode(d->node);
         return;
     }
 
-    vsapi->createFilter(in, out, "TCanny", tcannyInit, tcannyGetFrame, tcannyFree, fmParallel, 0, d.release(), core);
+    vsapi->createFilter(in, out, "TCanny", tcannyInit, tcannyGetFrame, tcannyFree, fmParallel, 0, d.get(), core);
+    d.release();
 }
 
 //////////////////////////////////////////
 // Init
 
-VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin *plugin) {
+VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin* plugin) {
     configFunc("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VAPOURSYNTH_API_VERSION, 1, plugin);
     registerFunc("TCanny",
                  "clip:clip;"

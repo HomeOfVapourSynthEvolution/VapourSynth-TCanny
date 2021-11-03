@@ -1,43 +1,46 @@
 /***************************  vectormath_common.h   ****************************
 * Author:        Agner Fog
 * Date created:  2014-04-18
-* Last modified: 2016-11-25
-* Version:       1.25
+* Last modified: 2020-06-08
+* Version:       2.01.03
 * Project:       vector classes
 * Description:
 * Header file containing common code for inline version of mathematical functions.
 *
-* Theory, methods and inspiration based partially on these sources:
-* > Moshier, Stephen Lloyd Baluk: Methods and programs for mathematical functions.
-*   Ellis Horwood, 1989.
-* > VDT library developed on CERN by Danilo Piparo, Thomas Hauth and
-*   Vincenzo Innocente, 2012, https://svnweb.cern.ch/trac/vdt
-* > Cephes math library by Stephen L. Moshier 1992,
-*   http://www.netlib.org/cephes/
-*
-* Calculation methods:
-* Some functions are using Padé approximations f(x) = P(x)/Q(x)
-* Most single precision functions are using Taylor expansions
-*
 * For detailed instructions, see VectorClass.pdf
 *
-* (c) Copyright 2014-2016 GNU General Public License http://www.gnu.org/licenses
+* (c) Copyright 2014-2020 Agner Fog.
+* Apache License version 2.0 or later.
 ******************************************************************************/
 
 #ifndef VECTORMATH_COMMON_H
-#define VECTORMATH_COMMON_H  1
+#define VECTORMATH_COMMON_H  2
 
 #ifdef VECTORMATH_LIB_H
-#error conflicting header files: vectormath_lib.h for external math functions, other vectormath_xxx.h for inline math functions
+#error conflicting header files. More than one implementation of mathematical functions included
 #endif
 
-#include <math.h>
-#include "vectorclass.h"
+#include <cmath>
 
+#ifndef VECTORCLASS_H
+#include "vectorclass.h"
+#endif
+
+#if VECTORCLASS_H < 20000
+#error Incompatible versions of vector class library mixed
+#endif
 
 
 /******************************************************************************
-               define mathematical constants
+                    Define NAN payload values
+******************************************************************************/
+#define NAN_LOG 0x101  // logarithm for x<0
+#define NAN_POW 0x102  // negative number raised to non-integer power
+#define NAN_HYP 0x104  // acosh for x<1 and atanh for abs(x)>1
+
+
+/******************************************************************************
+                    Define mathematical constants
 ******************************************************************************/
 #define VM_PI       3.14159265358979323846           // pi
 #define VM_PI_2     1.57079632679489661923           // pi / 2
@@ -50,6 +53,7 @@
 #define VM_LN10     2.30258509299404568402           // log(10)
 #define VM_SMALLEST_NORMAL  2.2250738585072014E-308  // smallest normal number, double
 #define VM_SMALLEST_NORMALF 1.17549435E-38f          // smallest normal number, float
+
 
 #ifdef VCL_NAMESPACE
 namespace VCL_NAMESPACE {
@@ -100,52 +104,57 @@ inline Vec16f infinite_vec<Vec16f>() {
 #endif // MAX_VECTOR_SIZE >= 512
 
 
-// template for producing quiet NAN
-template <class VTYPE>
-static inline VTYPE nan_vec(int n = 0x100);
 
-template <>
-inline Vec2d nan_vec<Vec2d>(int n) {
-    return nan2d(n);
+/******************************************************************************
+*                 Detect NAN codes
+*
+* These functions return the code hidden in a NAN. The sign bit is ignored
+******************************************************************************/
+
+static inline Vec4ui nan_code(Vec4f const x) {
+    Vec4ui a = Vec4ui(reinterpret_i(x));
+    Vec4ui const n = 0x007FFFFF;
+    return select(Vec4ib(is_nan(x)), a & n, 0);
 }
 
-template <>
-inline Vec4f nan_vec<Vec4f>(int n) {
-    return nan4f(n);
+// This function returns the code hidden in a NAN. The sign bit is ignored
+static inline Vec2uq nan_code(Vec2d const x) {
+    Vec2uq a = Vec2uq(reinterpret_i(x));
+    return select(Vec2qb(is_nan(x)), a << 12 >> (12+29), 0);
 }
 
 #if MAX_VECTOR_SIZE >= 256
 
-template <>
-inline Vec4d nan_vec<Vec4d>(int n) {
-    return nan4d(n);
+// This function returns the code hidden in a NAN. The sign bit is ignored
+static inline Vec8ui nan_code(Vec8f const x) {
+    Vec8ui a = Vec8ui(reinterpret_i(x));
+    Vec8ui const n = 0x007FFFFF;
+    return select(Vec8ib(is_nan(x)), a & n, 0);
 }
 
-template <>
-inline Vec8f nan_vec<Vec8f>(int n) {
-    return nan8f(n);
+// This function returns the code hidden in a NAN. The sign bit is ignored
+static inline Vec4uq nan_code(Vec4d const x) {
+    Vec4uq a = Vec4uq(reinterpret_i(x));
+    return select(Vec4qb(is_nan(x)), a << 12 >> (12+29), 0);
 }
 
 #endif // MAX_VECTOR_SIZE >= 256
-
 #if MAX_VECTOR_SIZE >= 512
 
-template <>
-inline Vec8d nan_vec<Vec8d>(int n) {
-    return nan8d(n);
+// This function returns the code hidden in a NAN. The sign bit is ignored
+static inline Vec16ui nan_code(Vec16f const x) {
+    Vec16ui a = Vec16ui(reinterpret_i(x));
+    Vec16ui const n = 0x007FFFFF;
+    return select(Vec16ib(is_nan(x)), a & n, 0);
 }
 
-template <>
-inline Vec16f nan_vec<Vec16f>(int n) {
-    return nan16f(n);
+// This function returns the code hidden in a NAN. The sign bit is ignored
+static inline Vec8uq nan_code(Vec8d const x) {
+    Vec8uq a = Vec8uq(reinterpret_i(x));
+    return select(Vec8qb(is_nan(x)), a << 12 >> (12+29), 0);
 }
 
 #endif // MAX_VECTOR_SIZE >= 512
-
-// Define NAN trace values
-#define NAN_LOG 0x101  // logarithm for x<0
-#define NAN_POW 0x102  // negative number raised to non-integer power
-#define NAN_HYP 0x104  // acosh for x<1 and atanh for abs(x)>1
 
 
 /******************************************************************************
@@ -154,9 +163,9 @@ Using Estrin's scheme to make shorter dependency chains and use FMA, starting
 longest dependency chains first.
 ******************************************************************************/
 
-// template <typedef VECTYPE, typedef CTYPE> 
+// template <typedef VECTYPE, typedef CTYPE>
 template <class VTYPE, class CTYPE>
-static inline VTYPE polynomial_2(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2) {
+static inline VTYPE polynomial_2(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2) {
     // calculates polynomial c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -165,7 +174,7 @@ static inline VTYPE polynomial_2(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2) 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_3(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3) {
+static inline VTYPE polynomial_3(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3) {
     // calculates polynomial c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -174,7 +183,7 @@ static inline VTYPE polynomial_3(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_4(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4) {
+static inline VTYPE polynomial_4(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4) {
     // calculates polynomial c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -184,7 +193,7 @@ static inline VTYPE polynomial_4(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_4n(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3) {
+static inline VTYPE polynomial_4n(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3) {
     // calculates polynomial 1*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -194,7 +203,7 @@ static inline VTYPE polynomial_4n(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2,
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_5(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5) {
+static inline VTYPE polynomial_5(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5) {
     // calculates polynomial c5*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -204,7 +213,7 @@ static inline VTYPE polynomial_5(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_5n(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4) {
+static inline VTYPE polynomial_5n(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4) {
     // calculates polynomial 1*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -214,7 +223,7 @@ static inline VTYPE polynomial_5n(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2,
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_6(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6) {
+static inline VTYPE polynomial_6(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6) {
     // calculates polynomial c6*x^6 + c5*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -224,7 +233,7 @@ static inline VTYPE polynomial_6(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_6n(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5) {
+static inline VTYPE polynomial_6n(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5) {
     // calculates polynomial 1*x^6 + c5*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -234,7 +243,7 @@ static inline VTYPE polynomial_6n(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2,
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_7(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7) {
+static inline VTYPE polynomial_7(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7) {
     // calculates polynomial c7*x^7 + c6*x^6 + c5*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x * x;
@@ -244,7 +253,7 @@ static inline VTYPE polynomial_7(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_8(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8) {
+static inline VTYPE polynomial_8(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8) {
     // calculates polynomial c8*x^8 + c7*x^7 + c6*x^6 + c5*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x  * x;
@@ -256,7 +265,7 @@ static inline VTYPE polynomial_8(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_9(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9) {
+static inline VTYPE polynomial_9(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9) {
     // calculates polynomial c9*x^9 + c8*x^8 + c7*x^7 + c6*x^6 + c5*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x  * x;
@@ -269,7 +278,7 @@ static inline VTYPE polynomial_9(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, 
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_10(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9, CTYPE c10) {
+static inline VTYPE polynomial_10(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9, CTYPE c10) {
     // calculates polynomial c10*x^10 + c9*x^9 + c8*x^8 + c7*x^7 + c6*x^6 + c5*x^5 + c4*x^4 + c3*x^3 + c2*x^2 + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x  * x;
@@ -282,7 +291,7 @@ static inline VTYPE polynomial_10(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2,
 }
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_13(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9, CTYPE c10, CTYPE c11, CTYPE c12, CTYPE c13) {
+static inline VTYPE polynomial_13(VTYPE const x, CTYPE c0, CTYPE c1, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9, CTYPE c10, CTYPE c11, CTYPE c12, CTYPE c13) {
     // calculates polynomial c13*x^13 + c12*x^12 + ... + c1*x + c0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x  * x;
@@ -299,7 +308,7 @@ static inline VTYPE polynomial_13(VTYPE const & x, CTYPE c0, CTYPE c1, CTYPE c2,
 
 
 template<class VTYPE, class CTYPE>
-static inline VTYPE polynomial_13m(VTYPE const & x, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9, CTYPE c10, CTYPE c11, CTYPE c12, CTYPE c13) {
+static inline VTYPE polynomial_13m(VTYPE const x, CTYPE c2, CTYPE c3, CTYPE c4, CTYPE c5, CTYPE c6, CTYPE c7, CTYPE c8, CTYPE c9, CTYPE c10, CTYPE c11, CTYPE c12, CTYPE c13) {
     // calculates polynomial c13*x^13 + c12*x^12 + ... + x + 0
     // VTYPE may be a vector type, CTYPE is a scalar type
     VTYPE x2 = x  * x;
