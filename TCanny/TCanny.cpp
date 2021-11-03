@@ -28,9 +28,9 @@
 using namespace std::literals;
 
 #ifdef TCANNY_X86
-template<typename pixel_t> extern void filter_sse2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
-template<typename pixel_t> extern void filter_avx2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
-template<typename pixel_t> extern void filter_avx512(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template<typename pixel_t> extern void filter_sse2(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template<typename pixel_t> extern void filter_avx2(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template<typename pixel_t> extern void filter_avx512(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
 #endif
 
 static auto gaussianWeights(const float sigma, int& radius) noexcept {
@@ -52,8 +52,9 @@ static auto gaussianWeights(const float sigma, int& radius) noexcept {
 }
 
 template<typename pixel_t>
-static void gaussianBlur(const pixel_t* _srcp, float* VS_RESTRICT temp, float* VS_RESTRICT dstp, const int width, const int height, const int srcStride,
-                         const int dstStride, const int radiusH, const int radiusV, const float* weightsH, const float* weightsV, const float offset) noexcept {
+static void gaussianBlur(const pixel_t* _srcp, float* VS_RESTRICT temp, float* VS_RESTRICT dstp, const int width, const int height,
+                         const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radiusH, const int radiusV,
+                         const float* weightsH, const float* weightsV, const float offset) noexcept {
     auto diameter{ radiusV * 2 + 1 };
     auto srcp{ std::make_unique<const pixel_t* []>(diameter) };
 
@@ -100,7 +101,7 @@ static void gaussianBlur(const pixel_t* _srcp, float* VS_RESTRICT temp, float* V
 
 template<typename pixel_t>
 static void gaussianBlurH(const pixel_t* srcp, float* VS_RESTRICT temp, float* VS_RESTRICT dstp, const int width, const int height,
-                          const int srcStride, const int dstStride, const int radius, const float* weights, const float offset) noexcept {
+                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights, const float offset) noexcept {
     weights += radius;
 
     for (auto y{ 0 }; y < height; y++) {
@@ -131,8 +132,8 @@ static void gaussianBlurH(const pixel_t* srcp, float* VS_RESTRICT temp, float* V
 }
 
 template<typename pixel_t>
-static void gaussianBlurV(const pixel_t* _srcp, float* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
-                          const int radius, const float* weights, const float offset) noexcept {
+static void gaussianBlurV(const pixel_t* _srcp, float* VS_RESTRICT dstp, const int width, const int height,
+                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights, const float offset) noexcept {
     auto diameter{ radius * 2 + 1 };
     auto srcp{ std::make_unique<const pixel_t* []>(diameter) };
 
@@ -162,7 +163,7 @@ static void gaussianBlurV(const pixel_t* _srcp, float* VS_RESTRICT dstp, const i
 }
 
 template<typename pixel_t>
-static void copyPlane(const pixel_t* srcp, float* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void copyPlane(const pixel_t* srcp, float* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                       const float offset) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x++) {
@@ -178,7 +179,7 @@ static void copyPlane(const pixel_t* srcp, float* VS_RESTRICT dstp, const int wi
 }
 
 static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int* VS_RESTRICT direction, const int width, const int height,
-                       const int stride, const int bgStride, const int mode, const int op) noexcept {
+                       const ptrdiff_t stride, const ptrdiff_t bgStride, const int mode, const int op) noexcept {
     auto prev{ blur + bgStride };
     auto cur{ blur };
     auto next{ blur + bgStride };
@@ -237,8 +238,8 @@ static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int
 }
 
 static void nonMaximumSuppression(const int* direction, float* VS_RESTRICT gradient, float* VS_RESTRICT blur, const int width, const int height,
-                                  const int stride, const int bgStride, const int radiusAlign) noexcept {
-    const int offsets[]{ 1, -bgStride + 1, -bgStride, -bgStride - 1 };
+                                  const ptrdiff_t stride, const ptrdiff_t bgStride, const int radiusAlign) noexcept {
+    const ptrdiff_t offsets[]{ 1, -bgStride + 1, -bgStride, -bgStride - 1 };
 
     gradient[-1] = gradient[1];
     gradient[-1 + bgStride * (height - 1)] = gradient[1 + bgStride * (height - 1)];
@@ -260,7 +261,7 @@ static void nonMaximumSuppression(const int* direction, float* VS_RESTRICT gradi
 }
 
 template<typename pixel_t>
-static void outputGB(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void outputGB(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                      const int peak, const float offset) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x++) {
@@ -276,7 +277,7 @@ static void outputGB(const float* srcp, pixel_t* VS_RESTRICT dstp, const int wid
 }
 
 template<typename pixel_t>
-static void binarizeCE(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void binarizeCE(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                        const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x++) {
@@ -292,7 +293,7 @@ static void binarizeCE(const float* srcp, pixel_t* VS_RESTRICT dstp, const int w
 }
 
 template<typename pixel_t>
-static void discretizeGM(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void discretizeGM(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                          const float magnitude, const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x++) {
@@ -308,12 +309,12 @@ static void discretizeGM(const float* srcp, pixel_t* VS_RESTRICT dstp, const int
 }
 
 template<typename pixel_t>
-static void filter_c(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept {
-    for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++) {
+static void filter_c(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept {
+    for (auto plane{ 0 }; plane < d->vi->format.numPlanes; plane++) {
         if (d->process[plane]) {
             const auto width{ vsapi->getFrameWidth(src, plane) };
             const auto height{ vsapi->getFrameHeight(src, plane) };
-            const auto stride{ vsapi->getStride(src, plane) / d->vi->format->bytesPerSample };
+            const auto stride{ vsapi->getStride(src, plane) / d->vi->format.bytesPerSample };
             const auto bgStride{ stride + d->radiusAlign * 2 };
             auto srcp{ reinterpret_cast<const pixel_t*>(vsapi->getReadPtr(src, plane)) };
             auto dstp{ reinterpret_cast<pixel_t*>(vsapi->getWritePtr(dst, plane)) };
@@ -353,48 +354,44 @@ static void filter_c(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* c
     }
 }
 
-static void VS_CC tcannyInit([[maybe_unused]] VSMap* in, [[maybe_unused]] VSMap* out, void** instanceData, VSNode* node, [[maybe_unused]] VSCore* core, const VSAPI* vsapi) {
-    auto d{ static_cast<TCannyData*>(*instanceData) };
-    vsapi->setVideoInfo(d->vi, 1, node);
-}
-
-static const VSFrameRef* VS_CC tcannyGetFrame(int n, int activationReason, void** instanceData, [[maybe_unused]] void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
-    auto d{ static_cast<TCannyData*>(*instanceData) };
+static const VSFrame* VS_CC tcannyGetFrame(int n, int activationReason, void* instanceData, [[maybe_unused]] void** frameData, VSFrameContext* frameCtx, VSCore* core, const VSAPI* vsapi) {
+    auto d{ static_cast<TCannyData*>(instanceData) };
 
     if (activationReason == arInitial) {
         vsapi->requestFrameFilter(n, d->node, frameCtx);
     } else if (activationReason == arAllFramesReady) {
         auto src{ vsapi->getFrameFilter(n, d->node, frameCtx) };
-        const VSFrameRef* fr[]{ d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
+        const VSFrame* fr[]{ d->process[0] ? nullptr : src, d->process[1] ? nullptr : src, d->process[2] ? nullptr : src };
         const int pl[]{ 0, 1, 2 };
-        auto dst{ vsapi->newVideoFrame2(d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core) };
+        auto dst{ vsapi->newVideoFrame2(&d->vi->format, d->vi->width, d->vi->height, fr, pl, src, core) };
 
         try {
             auto threadId{ std::this_thread::get_id() };
+            auto stride{ vsapi->getStride(src, 0) / d->vi->format.bytesPerSample };
 
             if (!d->blur.count(threadId)) {
-                auto blur{ vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + d->radiusAlign * 2) * d->vi->height * sizeof(float), d->alignment) };
+                auto blur{ vsh::vsh_aligned_malloc<float>((stride + d->radiusAlign * 2) * d->vi->height * sizeof(float), d->alignment) };
                 if (!blur)
                     throw "malloc failure (blur)"s;
-                d->blur.emplace(threadId, unique_float{ blur, vs_aligned_free });
+                d->blur.emplace(threadId, unique_float{ blur, vsh::vsh_aligned_free });
 
-                auto gradient{ vs_aligned_malloc<float>((vsapi->getStride(src, 0) / d->vi->format->bytesPerSample + d->radiusAlign * 2) * (d->vi->height + 2) * sizeof(float), d->alignment) };
+                auto gradient{ vsh::vsh_aligned_malloc<float>((stride + d->radiusAlign * 2) * (d->vi->height + 2) * sizeof(float), d->alignment) };
                 if (!gradient)
                     throw "malloc failure (gradient)"s;
-                d->gradient.emplace(threadId, unique_float{ gradient, vs_aligned_free });
+                d->gradient.emplace(threadId, unique_float{ gradient, vsh::vsh_aligned_free });
 
                 if (d->mode == 0) {
-                    auto direction{ vs_aligned_malloc<int>(vsapi->getStride(src, 0) / d->vi->format->bytesPerSample * d->vi->height * sizeof(int), d->alignment) };
+                    auto direction{ vsh::vsh_aligned_malloc<int>(stride * d->vi->height * sizeof(int), d->alignment) };
                     if (!direction)
                         throw "malloc failure (direction)"s;
-                    d->direction.emplace(threadId, unique_int{ direction, vs_aligned_free });
+                    d->direction.emplace(threadId, unique_int{ direction, vsh::vsh_aligned_free });
 
                     auto found{ new (std::nothrow) bool[d->vi->width * d->vi->height] };
                     if (!found)
                         throw "malloc failure (found)"s;
                     d->found.emplace(threadId, found);
                 } else {
-                    d->direction.emplace(threadId, unique_int{ nullptr, vs_aligned_free });
+                    d->direction.emplace(threadId, unique_int{ nullptr, vsh::vsh_aligned_free });
                     d->found.emplace(threadId, nullptr);
                 }
             }
@@ -424,79 +421,79 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
     auto d{ std::make_unique<TCannyData>() };
 
     try {
-        d->node = vsapi->propGetNode(in, "clip", 0, nullptr);
+        d->node = vsapi->mapGetNode(in, "clip", 0, nullptr);
         d->vi = vsapi->getVideoInfo(d->node);
         auto err{ 0 };
 
-        if (!isConstantFormat(d->vi) ||
-            (d->vi->format->sampleType == stInteger && d->vi->format->bitsPerSample > 16) ||
-            (d->vi->format->sampleType == stFloat && d->vi->format->bitsPerSample != 32))
+        if (!vsh::isConstantVideoFormat(d->vi) ||
+            (d->vi->format.sampleType == stInteger && d->vi->format.bitsPerSample > 16) ||
+            (d->vi->format.sampleType == stFloat && d->vi->format.bitsPerSample != 32))
             throw "only constant format 8-16 bit integer and 32 bit float input supported"s;
 
         if (d->vi->height < 2)
             throw "clip's height must be at least 2"s;
 
-        const auto numSigmaH{ vsapi->propNumElements(in, "sigma") };
-        if (numSigmaH > d->vi->format->numPlanes)
+        const auto numSigmaH{ vsapi->mapNumElements(in, "sigma") };
+        if (numSigmaH > d->vi->format.numPlanes)
             throw "more sigma given than there are planes"s;
 
-        const auto numSigmaV{ vsapi->propNumElements(in, "sigma_v") };
-        if (numSigmaV > d->vi->format->numPlanes)
+        const auto numSigmaV{ vsapi->mapNumElements(in, "sigma_v") };
+        if (numSigmaV > d->vi->format.numPlanes)
             throw "more sigma_v given than there are planes"s;
 
         float sigmaH[3]{}, sigmaV[3]{};
 
-        for (auto i{ 0 }; i < d->vi->format->numPlanes; i++) {
+        for (auto i{ 0 }; i < d->vi->format.numPlanes; i++) {
             if (i < numSigmaH)
-                sigmaH[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma", i, nullptr));
+                sigmaH[i] = vsapi->mapGetFloatSaturated(in, "sigma", i, nullptr);
             else if (i == 0)
                 sigmaH[0] = 1.5f;
             else if (i == 1)
-                sigmaH[1] = sigmaH[0] / (1 << d->vi->format->subSamplingW);
+                sigmaH[1] = sigmaH[0] / (1 << d->vi->format.subSamplingW);
             else
                 sigmaH[2] = sigmaH[1];
 
             if (i < numSigmaV)
-                sigmaV[i] = static_cast<float>(vsapi->propGetFloat(in, "sigma_v", i, nullptr));
+                sigmaV[i] = vsapi->mapGetFloatSaturated(in, "sigma_v", i, nullptr);
             else if (i < numSigmaH)
                 sigmaV[i] = sigmaH[i];
             else if (i == 0)
                 sigmaV[0] = 1.5f;
             else if (i == 1)
-                sigmaV[1] = sigmaV[0] / (1 << d->vi->format->subSamplingH);
+                sigmaV[1] = sigmaV[0] / (1 << d->vi->format.subSamplingH);
             else
                 sigmaV[2] = sigmaV[1];
         }
 
-        d->t_h = static_cast<float>(vsapi->propGetFloat(in, "t_h", 0, &err));
+        d->t_h = vsapi->mapGetFloatSaturated(in, "t_h", 0, &err);
         if (err)
             d->t_h = 8.0f;
 
-        d->t_l = static_cast<float>(vsapi->propGetFloat(in, "t_l", 0, &err));
+        d->t_l = vsapi->mapGetFloatSaturated(in, "t_l", 0, &err);
         if (err)
             d->t_l = 1.0f;
 
-        d->mode = int64ToIntS(vsapi->propGetInt(in, "mode", 0, &err));
+        d->mode = vsapi->mapGetIntSaturated(in, "mode", 0, &err);
 
-        d->op = int64ToIntS(vsapi->propGetInt(in, "op", 0, &err));
+        d->op = vsapi->mapGetIntSaturated(in, "op", 0, &err);
         if (err)
             d->op = 1;
 
-        auto gmmax{ static_cast<float>(vsapi->propGetFloat(in, "gmmax", 0, &err)) };
+        auto gmmax{ vsapi->mapGetFloatSaturated(in, "gmmax", 0, &err) };
         if (err)
             gmmax = 50.0f;
 
-        auto opt{ int64ToIntS(vsapi->propGetInt(in, "opt", 0, &err)) };
+        auto opt{ vsapi->mapGetIntSaturated(in, "opt", 0, &err) };
 
-        const auto m{ vsapi->propNumElements(in, "planes") };
+        const auto m{ vsapi->mapNumElements(in, "planes") };
 
         for (auto i{ 0 }; i < 3; i++)
             d->process[i] = (m <= 0);
 
         for (auto i{ 0 }; i < m; i++) {
-            auto n{ int64ToIntS(vsapi->propGetInt(in, "planes", i, nullptr)) };
+            auto n{ vsapi->mapGetIntSaturated(in, "planes", i, nullptr) };
 
-            if (n < 0 || n >= d->vi->format->numPlanes)
+            if (n < 0 || n >= d->vi->format.numPlanes)
                 throw "plane index out of range"s;
 
             if (d->process[n])
@@ -505,7 +502,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
             d->process[n] = true;
         }
 
-        for (auto i{ 0 }; i < d->vi->format->numPlanes; i++) {
+        for (auto i{ 0 }; i < d->vi->format.numPlanes; i++) {
             if (sigmaH[i] < 0.0f)
                 throw "sigma must be greater than or equal to 0.0"s;
 
@@ -547,7 +544,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
             }
 #endif
 
-            if (d->vi->format->bytesPerSample == 1) {
+            if (d->vi->format.bytesPerSample == 1) {
                 d->filter = filter_c<uint8_t>;
 
 #ifdef TCANNY_X86
@@ -558,7 +555,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
                 else if ((opt == 0 && iset >= 2) || opt == 2)
                     d->filter = filter_sse2<uint8_t>;
 #endif
-            } else if (d->vi->format->bytesPerSample == 2) {
+            } else if (d->vi->format.bytesPerSample == 2) {
                 d->filter = filter_c<uint16_t>;
 
 #ifdef TCANNY_X86
@@ -583,14 +580,16 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
             }
         }
 
-        const auto numThreads{ vsapi->getCoreInfo(core)->numThreads };
-        d->blur.reserve(numThreads);
-        d->gradient.reserve(numThreads);
-        d->direction.reserve(numThreads);
-        d->found.reserve(numThreads);
+        VSCoreInfo info;
+        vsapi->getCoreInfo(core, &info);
 
-        if (d->vi->format->sampleType == stInteger) {
-            d->peak = (1 << d->vi->format->bitsPerSample) - 1;
+        d->blur.reserve(info.numThreads);
+        d->gradient.reserve(info.numThreads);
+        d->direction.reserve(info.numThreads);
+        d->found.reserve(info.numThreads);
+
+        if (d->vi->format.sampleType == stInteger) {
+            d->peak = (1 << d->vi->format.bitsPerSample) - 1;
             auto scale{ d->peak / 255.0f };
             d->t_h *= scale;
             d->t_l *= scale;
@@ -598,18 +597,18 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
             d->t_h /= 255.0f;
             d->t_l /= 255.0f;
 
-            for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++)
-                d->offset[plane] = (plane == 0 || d->vi->format->colorFamily == cmRGB) ? 0.0f : 0.5f;
+            for (auto plane{ 0 }; plane < d->vi->format.numPlanes; plane++)
+                d->offset[plane] = (plane == 0 || d->vi->format.colorFamily == cfRGB) ? 0.0f : 0.5f;
         }
 
-        for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++) {
+        for (auto plane{ 0 }; plane < d->vi->format.numPlanes; plane++) {
             if (d->process[plane]) {
                 auto planeOrder{ plane == 0 ? "first" : (plane == 1 ? "second" : "third") };
 
                 if (sigmaH[plane]) {
                     d->weightsH[plane].reset(gaussianWeights(sigmaH[plane], d->radiusH[plane]));
 
-                    auto width{ d->vi->width >> (plane ? d->vi->format->subSamplingW : 0) };
+                    auto width{ d->vi->width >> (plane ? d->vi->format.subSamplingW : 0) };
                     if (width < d->radiusH[plane] + 1)
                         throw "the "s + planeOrder + " plane's width must be at least " + std::to_string(d->radiusH[plane] + 1) + " for specified sigma";
                 }
@@ -617,7 +616,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
                 if (sigmaV[plane]) {
                     d->weightsV[plane].reset(gaussianWeights(sigmaV[plane], d->radiusV[plane]));
 
-                    auto height{ d->vi->height >> (plane ? d->vi->format->subSamplingH : 0) };
+                    auto height{ d->vi->height >> (plane ? d->vi->format.subSamplingH : 0) };
                     if (height < d->radiusV[plane] + 1)
                         throw "the "s + planeOrder + " plane's height must be at least " + std::to_string(d->radiusV[plane] + 1) + " for specified sigma_v";
                 }
@@ -628,30 +627,32 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
 
         d->magnitude = 255.0f / gmmax;
     } catch (const std::string& error) {
-        vsapi->setError(out, ("TCanny: " + error).c_str());
+        vsapi->mapSetError(out, ("TCanny: " + error).c_str());
         vsapi->freeNode(d->node);
         return;
     }
 
-    vsapi->createFilter(in, out, "TCanny", tcannyInit, tcannyGetFrame, tcannyFree, fmParallel, 0, d.get(), core);
+    VSFilterDependency deps[]{ {d->node, rpStrictSpatial} };
+    vsapi->createVideoFilter(out, "TCanny", d->vi, tcannyGetFrame, tcannyFree, fmParallel, deps, 1, d.get(), core);
     d.release();
 }
 
 //////////////////////////////////////////
 // Init
 
-VS_EXTERNAL_API(void) VapourSynthPluginInit(VSConfigPlugin configFunc, VSRegisterFunction registerFunc, VSPlugin* plugin) {
-    configFunc("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VAPOURSYNTH_API_VERSION, 1, plugin);
-    registerFunc("TCanny",
-                 "clip:clip;"
-                 "sigma:float[]:opt;"
-                 "sigma_v:float[]:opt;"
-                 "t_h:float:opt;"
-                 "t_l:float:opt;"
-                 "mode:int:opt;"
-                 "op:int:opt;"
-                 "gmmax:float:opt;"
-                 "opt:int:opt;"
-                 "planes:int[]:opt;",
-                 tcannyCreate, nullptr, plugin);
+VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
+    vspapi->configPlugin("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VS_MAKE_VERSION(12, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->registerFunction("TCanny",
+                             "clip:vnode;"
+                             "sigma:float[]:opt;"
+                             "sigma_v:float[]:opt;"
+                             "t_h:float:opt;"
+                             "t_l:float:opt;"
+                             "mode:int:opt;"
+                             "op:int:opt;"
+                             "gmmax:float:opt;"
+                             "opt:int:opt;"
+                             "planes:int[]:opt;",
+                             "clip:vnode;",
+                             tcannyCreate, nullptr, plugin);
 }

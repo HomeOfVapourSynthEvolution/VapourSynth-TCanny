@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include <VapourSynth.h>
-#include <VSHelper.h>
+#include <VapourSynth4.h>
+#include <VSHelper4.h>
 
 #ifdef TCANNY_X86
 #include "VCL2/vectormath_trig.h"
@@ -21,11 +21,11 @@ static constexpr float M_1_PIF = 0.318309886183790671538f;
 static constexpr float fltMax = std::numeric_limits<float>::max();
 static constexpr float fltLowest = std::numeric_limits<float>::lowest();
 
-using unique_float = std::unique_ptr<float[], decltype(&vs_aligned_free)>;
-using unique_int = std::unique_ptr<int[], decltype(&vs_aligned_free)>;
+using unique_float = std::unique_ptr<float[], decltype(&vsh::vsh_aligned_free)>;
+using unique_int = std::unique_ptr<int[], decltype(&vsh::vsh_aligned_free)>;
 
 struct TCannyData final {
-    VSNodeRef* node;
+    VSNode* node;
     const VSVideoInfo* vi;
     float t_h;
     float t_l;
@@ -45,10 +45,11 @@ struct TCannyData final {
     std::unordered_map<std::thread::id, unique_float> blur;
     std::unordered_map<std::thread::id, unique_float> gradient;
     std::unordered_map<std::thread::id, unique_int> direction;
-    void (*filter)(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+    void (*filter)(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
 };
 
-static void hysteresis(float* VS_RESTRICT srcp, bool* VS_RESTRICT found, const int width, const int height, const int stride, const float t_h, const float t_l) noexcept {
+static void hysteresis(float* VS_RESTRICT srcp, bool* VS_RESTRICT found, const int width, const int height, const ptrdiff_t stride,
+                       const float t_h, const float t_l) noexcept {
     std::fill_n(found, width * height, false);
     std::vector<std::pair<int, int>> coordinates;
 

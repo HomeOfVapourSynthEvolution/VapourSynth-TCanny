@@ -2,8 +2,9 @@
 #include "TCanny.h"
 
 template<typename pixel_t>
-static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const int width, const int height, const int srcStride, const int dstStride,
-                         const int radiusH, const int radiusV, const float* weightsH, const float* weightsV, const float offset) noexcept {
+static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const int width, const int height,
+                         const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radiusH, const int radiusV,
+                         const float* weightsH, const float* weightsV, const float offset) noexcept {
     auto diameter{ radiusV * 2 + 1 };
     auto _srcp{ std::make_unique<const pixel_t* []>(diameter) };
 
@@ -57,8 +58,8 @@ static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const 
 }
 
 template<typename pixel_t>
-static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const int width, const int height, const int srcStride, const int dstStride,
-                          const int radius, const float* weights, const float offset) noexcept {
+static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const int width, const int height,
+                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights, const float offset) noexcept {
     weights += radius;
 
     for (auto y{ 0 }; y < height; y++) {
@@ -93,7 +94,7 @@ static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const 
 }
 
 template<typename pixel_t>
-static void gaussianBlurV(const pixel_t* __srcp, float* dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void gaussianBlurV(const pixel_t* __srcp, float* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                           const int radius, const float* weights, const float offset) noexcept {
     auto diameter{ radius * 2 + 1 };
     auto _srcp{ std::make_unique<const pixel_t* []>(diameter) };
@@ -130,7 +131,7 @@ static void gaussianBlurV(const pixel_t* __srcp, float* dstp, const int width, c
 }
 
 template<typename pixel_t>
-static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                       const float offset) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec8f().size()) {
@@ -147,7 +148,7 @@ static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const i
     }
 }
 
-static void detectEdge(float* blur, float* gradient, int* direction, const int width, const int height, const int stride, const int bgStride,
+static void detectEdge(float* blur, float* gradient, int* direction, const int width, const int height, const ptrdiff_t stride, const ptrdiff_t bgStride,
                        const int mode, const int op) noexcept {
     auto prev{ blur + bgStride };
     auto cur{ blur };
@@ -206,7 +207,7 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
 }
 
 static void nonMaximumSuppression(const int* _direction, float* _gradient, float* blur, const int width, const int height,
-                                  const int stride, const int bgStride, const int radiusAlign) noexcept {
+                                  const ptrdiff_t stride, const ptrdiff_t bgStride, const int radiusAlign) noexcept {
     _gradient[-1] = _gradient[1];
     _gradient[-1 + bgStride * (height - 1)] = _gradient[1 + bgStride * (height - 1)];
     _gradient[width] = _gradient[width - 2];
@@ -245,7 +246,7 @@ static void nonMaximumSuppression(const int* _direction, float* _gradient, float
 }
 
 template<typename pixel_t>
-static void outputGB(const float* _srcp, pixel_t* dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void outputGB(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                      const int peak, const float offset) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec8f().size()) {
@@ -268,7 +269,7 @@ static void outputGB(const float* _srcp, pixel_t* dstp, const int width, const i
 }
 
 template<typename pixel_t>
-static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                        const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec8f().size()) {
@@ -292,7 +293,7 @@ static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const
 }
 
 template<typename pixel_t>
-static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, const int height, const int srcStride, const int dstStride,
+static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                          const float magnitude, const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec8f().size()) {
@@ -315,12 +316,12 @@ static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, con
 }
 
 template<typename pixel_t>
-void filter_avx2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept {
-    for (auto plane{ 0 }; plane < d->vi->format->numPlanes; plane++) {
+void filter_avx2(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept {
+    for (auto plane{ 0 }; plane < d->vi->format.numPlanes; plane++) {
         if (d->process[plane]) {
             const auto width{ vsapi->getFrameWidth(src, plane) };
             const auto height{ vsapi->getFrameHeight(src, plane) };
-            const auto stride{ vsapi->getStride(src, plane) / d->vi->format->bytesPerSample };
+            const auto stride{ vsapi->getStride(src, plane) / d->vi->format.bytesPerSample };
             const auto bgStride{ stride + d->radiusAlign * 2 };
             auto srcp{ reinterpret_cast<const pixel_t*>(vsapi->getReadPtr(src, plane)) };
             auto dstp{ reinterpret_cast<pixel_t*>(vsapi->getWritePtr(dst, plane)) };
@@ -360,7 +361,7 @@ void filter_avx2(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const
     }
 }
 
-template void filter_avx2<uint8_t>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
-template void filter_avx2<uint16_t>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
-template void filter_avx2<float>(const VSFrameRef* src, VSFrameRef* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template void filter_avx2<uint8_t>(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template void filter_avx2<uint16_t>(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
+template void filter_avx2<float>(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RESTRICT d, const VSAPI* vsapi) noexcept;
 #endif

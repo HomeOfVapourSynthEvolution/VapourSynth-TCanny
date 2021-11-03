@@ -14,7 +14,7 @@ if get_option('buildtype') == 'release'
 endif
 
 if gcc_syntax
-  vapoursynth_dep = dependency('vapoursynth').partial_dependency(compile_args: true, includes: true)
+  vapoursynth_dep = dependency('vapoursynth', version: '>=55').partial_dependency(compile_args: true, includes: true)
   install_dir = vapoursynth_dep.get_variable(pkgconfig: 'libdir') / 'vapoursynth'
 else
   vapoursynth_dep = []
