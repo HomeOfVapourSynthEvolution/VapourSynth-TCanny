@@ -194,7 +194,7 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
                 gx = mul_add(17.0f, topRight, mul_add(61.0f, right, 17.0f * bottomRight)) - mul_add(17.0f, topLeft, mul_add(61.0f, left, 17.0f * bottomLeft));
                 gy = mul_add(17.0f, topLeft, mul_add(61.0f, top, 17.0f * topRight)) - mul_add(17.0f, bottomLeft, mul_add(61.0f, bottom, 17.0f * bottomRight));
                 break;
-            case ROBINSON:
+            case ROBINSON: {
                 auto g1{ topRight + mul_add(2.0f, right, bottomRight) - topLeft - mul_add(2.0f, left, bottomLeft) };
                 auto g2{ top + mul_add(2.0f, topRight, right) - left - mul_add(2.0f, bottomLeft, bottom) };
                 auto g3{ topLeft + mul_add(2.0f, top, topRight) - bottomLeft - mul_add(2.0f, bottom, bottomRight) };
@@ -202,8 +202,21 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
                 max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))).store_nt(gradient + x);
                 break;
             }
+            case KIRSCH: {
+                auto g1{ mul_sub(5.0f, topLeft + top + topRight, 3.0f * (left + right + bottomLeft + bottom + bottomRight)) };
+                auto g2{ mul_sub(5.0f, topLeft + top + left, 3.0f * (topRight + right + bottomLeft + bottom + bottomRight)) };
+                auto g3{ mul_sub(5.0f, topLeft + left + bottomLeft, 3.0f * (top + topRight + right + bottom + bottomRight)) };
+                auto g4{ mul_sub(5.0f, left + bottomLeft + bottom, 3.0f * (topLeft + top + topRight + right + bottomRight)) };
+                auto g5{ mul_sub(5.0f, bottomLeft + bottom + bottomRight, 3.0f * (topLeft + top + topRight + left + right)) };
+                auto g6{ mul_sub(5.0f, right + bottom + bottomRight, 3.0f * (topLeft + top + topRight + left + bottomLeft)) };
+                auto g7{ mul_sub(5.0f, topRight + right + bottomRight, 3.0f * (topLeft + top + left + bottomLeft + bottom)) };
+                auto g8{ mul_sub(5.0f, top + topRight + right, 3.0f * (topLeft + left + bottomLeft + bottom + bottomRight)) };
+                max(max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))), max(max(abs(g5), abs(g6)), max(abs(g7), abs(g8)))).store_nt(gradient + x);
+                break;
+            }
+            }
 
-            if (op != ROBINSON)
+            if (op < ROBINSON)
                 sqrt(mul_add(gx, gx, gy * gy)).store_nt(gradient + x);
 
             if (mode == 0) {
