@@ -212,9 +212,12 @@ static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int
             } else if (op == 2) {
                 gx = topRight + 2.0f * right + bottomRight - topLeft - 2.0f * left - bottomLeft;
                 gy = topLeft + 2.0f * top + topRight - bottomLeft - 2.0f * bottom - bottomRight;
-            } else {
+            } else if (op == 3) {
                 gx = 3.0f * topRight + 10.0f * right + 3.0f * bottomRight - 3.0f * topLeft - 10.0f * left - 3.0f * bottomLeft;
                 gy = 3.0f * topLeft + 10.0f * top + 3.0f * topRight - 3.0f * bottomLeft - 10.0f * bottom - 3.0f * bottomRight;
+            } else {
+                gx = 17.0f * topRight + 61.0f * right + 17.0f * bottomRight - 17.0f * topLeft - 61.0f * left - 17.0f * bottomLeft;
+                gy = 17.0f * topLeft + 61.0f * top + 17.0f * topRight - 17.0f * bottomLeft - 61.0f * bottom - 17.0f * bottomRight;
             }
 
             gradient[x] = std::sqrt(gx * gx + gy * gy);
@@ -516,8 +519,8 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
         if (d->mode < -1 || d->mode > 1)
             throw "mode must be -1, 0, or 1"s;
 
-        if (d->op < 0 || d->op > 3)
-            throw "op must be 0, 1, 2, or 3"s;
+        if (d->op < 0 || d->op > 4)
+            throw "op must be 0, 1, 2, 3, or 4"s;
 
         if (gmmax < 1.0f)
             throw "gmmax must be greater than or equal to 1.0"s;

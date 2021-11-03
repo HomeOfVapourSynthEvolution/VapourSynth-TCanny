@@ -27,6 +27,7 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
   - 1 = the Prewitt operator whose use is proposed by P. Zhou et al. [1]
   - 2 = the Sobel operator
   - 3 = the Scharr operator
+  - 4 = the Kroon operator
 
 - gmmax: Used for scaling gradient magnitude into [0, MAX_PIXEL_VALUE] for `mode=1`.
 

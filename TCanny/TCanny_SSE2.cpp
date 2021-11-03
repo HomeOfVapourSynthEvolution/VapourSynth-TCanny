@@ -182,9 +182,12 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
             } else if (op == 2) {
                 gx = topRight + mul_add(2.0f, right, bottomRight) - topLeft - mul_add(2.0f, left, bottomLeft);
                 gy = topLeft + mul_add(2.0f, top, topRight) - bottomLeft - mul_add(2.0f, bottom, bottomRight);
-            } else {
+            } else if (op == 3) {
                 gx = mul_add(3.0f, topRight, mul_add(10.0f, right, 3.0f * bottomRight)) - mul_add(3.0f, topLeft, mul_add(10.0f, left, 3.0f * bottomLeft));
                 gy = mul_add(3.0f, topLeft, mul_add(10.0f, top, 3.0f * topRight)) - mul_add(3.0f, bottomLeft, mul_add(10.0f, bottom, 3.0f * bottomRight));
+            } else {
+                gx = mul_add(17.0f, topRight, mul_add(61.0f, right, 17.0f * bottomRight)) - mul_add(17.0f, topLeft, mul_add(61.0f, left, 17.0f * bottomLeft));
+                gy = mul_add(17.0f, topLeft, mul_add(61.0f, top, 17.0f * topRight)) - mul_add(17.0f, bottomLeft, mul_add(61.0f, bottom, 17.0f * bottomRight));
             }
 
             sqrt(mul_add(gx, gx, gy * gy)).store_nt(gradient + x);
