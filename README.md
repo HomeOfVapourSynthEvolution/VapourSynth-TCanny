@@ -28,6 +28,7 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
   - 2 = the Sobel operator
   - 3 = the Scharr operator
   - 4 = the Kroon operator
+  - 5 = the Robinson operator
 
 - gmmax: Used for scaling gradient magnitude for `mode=1`.
 

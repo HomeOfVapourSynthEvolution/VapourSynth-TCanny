@@ -194,9 +194,17 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
                 gx = mul_add(17.0f, topRight, mul_add(61.0f, right, 17.0f * bottomRight)) - mul_add(17.0f, topLeft, mul_add(61.0f, left, 17.0f * bottomLeft));
                 gy = mul_add(17.0f, topLeft, mul_add(61.0f, top, 17.0f * topRight)) - mul_add(17.0f, bottomLeft, mul_add(61.0f, bottom, 17.0f * bottomRight));
                 break;
+            case ROBINSON:
+                auto g1{ topRight + mul_add(2.0f, right, bottomRight) - topLeft - mul_add(2.0f, left, bottomLeft) };
+                auto g2{ top + mul_add(2.0f, topRight, right) - left - mul_add(2.0f, bottomLeft, bottom) };
+                auto g3{ topLeft + mul_add(2.0f, top, topRight) - bottomLeft - mul_add(2.0f, bottom, bottomRight) };
+                auto g4{ left + mul_add(2.0f, topLeft, top) - bottom - mul_add(2.0f, bottomRight, right) };
+                max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))).store_nt(gradient + x);
+                break;
             }
 
-            sqrt(mul_add(gx, gx, gy * gy)).store_nt(gradient + x);
+            if (op != ROBINSON)
+                sqrt(mul_add(gx, gx, gy * gy)).store_nt(gradient + x);
 
             if (mode == 0) {
                 auto dr{ atan2(gy, gx) };

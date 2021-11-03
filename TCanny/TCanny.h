@@ -29,7 +29,8 @@ enum Operator {
     PREWITT,
     SOBEL,
     SCHARR,
-    KROON
+    KROON,
+    ROBINSON
 };
 
 struct TCannyData final {
