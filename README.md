@@ -9,7 +9,7 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
 
 - clip: Clip to process. Any planar format with either integer sample type of 8-16 bit depth or float sample type of 32 bit depth is supported.
 
-- sigma: Standard deviation of horizontal gaussian blur. If a single `sigma` is specified, it will be used for all planes. If two `sigma` are given then the second value will be used for the third plane as well.
+- sigma: Standard deviation of horizontal gaussian blur. Setting to 0 disables gaussian blur. If a single `sigma` is specified, it will be used for all planes. If two `sigma` are given then the second value will be used for the third plane as well.
 
 - sigma_v: Standard deviation of vertical gaussian blur.
 
