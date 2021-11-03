@@ -30,7 +30,6 @@ enum Operator {
     SOBEL,
     SCHARR,
     KROON,
-    ROBINSON,
     KIRSCH
 };
 

@@ -193,14 +193,6 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
                 gx = mul_add(17.0f, topRight + bottomRight, 61.0f * right) - mul_add(17.0f, topLeft + bottomLeft, 61.0f * left);
                 gy = mul_add(17.0f, topLeft + topRight, 61.0f * top) - mul_add(17.0f, bottomLeft + bottomRight, 61.0f * bottom);
                 break;
-            case ROBINSON: {
-                auto g1{ topRight + mul_add(2.0f, right, bottomRight) - topLeft - mul_add(2.0f, left, bottomLeft) };
-                auto g2{ top + mul_add(2.0f, topRight, right) - left - mul_add(2.0f, bottomLeft, bottom) };
-                auto g3{ topLeft + mul_add(2.0f, top, topRight) - bottomLeft - mul_add(2.0f, bottom, bottomRight) };
-                auto g4{ left + mul_add(2.0f, topLeft, top) - bottom - mul_add(2.0f, bottomRight, right) };
-                max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))).store_nt(gradient + x);
-                break;
-            }
             case KIRSCH: {
                 auto g1{ mul_sub(5.0f, topLeft + top + topRight, 3.0f * (left + right + bottomLeft + bottom + bottomRight)) };
                 auto g2{ mul_sub(5.0f, topLeft + top + left, 3.0f * (topRight + right + bottomLeft + bottom + bottomRight)) };
@@ -215,7 +207,7 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
             }
             }
 
-            if (op < ROBINSON)
+            if (op != KIRSCH)
                 sqrt(mul_add(gx, gx, gy * gy)).store_nt(gradient + x);
 
             if (mode == 0) {

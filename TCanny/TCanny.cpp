@@ -208,14 +208,6 @@ static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int
                 gx = 17.0f * topRight + 61.0f * right + 17.0f * bottomRight - 17.0f * topLeft - 61.0f * left - 17.0f * bottomLeft;
                 gy = 17.0f * topLeft + 61.0f * top + 17.0f * topRight - 17.0f * bottomLeft - 61.0f * bottom - 17.0f * bottomRight;
                 break;
-            case ROBINSON: {
-                auto g1{ topRight + 2.0f * right + bottomRight - topLeft - 2.0f * left - bottomLeft };
-                auto g2{ top + 2.0f * topRight + right - left - 2.0f * bottomLeft - bottom };
-                auto g3{ topLeft + 2.0f * top + topRight - bottomLeft - 2.0f * bottom - bottomRight };
-                auto g4{ left + 2.0f * topLeft + top - bottom - 2.0f * bottomRight - right };
-                gradient[x] = std::max({ std::abs(g1), std::abs(g2), std::abs(g3), std::abs(g4) });
-                break;
-            }
             case KIRSCH: {
                 auto g1{ 5.0f * topLeft + 5.0f * top + 5.0f * topRight - 3.0f * left - 3.0f * right - 3.0f * bottomLeft - 3.0f * bottom - 3.0f * bottomRight };
                 auto g2{ 5.0f * topLeft + 5.0f * top - 3.0f * topRight + 5.0f * left - 3.0f * right - 3.0f * bottomLeft - 3.0f * bottom - 3.0f * bottomRight };
@@ -230,7 +222,7 @@ static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int
             }
             }
 
-            if (op < ROBINSON)
+            if (op != KIRSCH)
                 gradient[x] = std::sqrt(gx * gx + gy * gy);
 
             if (mode == 0) {
@@ -530,11 +522,11 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
         if (d->mode < -1 || d->mode > 1)
             throw "mode must be -1, 0, or 1"s;
 
-        if (d->op < 0 || d->op > 6)
-            throw "op must be 0, 1, 2, 3, 4, 5, or 6"s;
+        if (d->op < 0 || d->op > 5)
+            throw "op must be 0, 1, 2, 3, 4, or 5"s;
 
-        if (d->op >= 5 && d->mode == 0)
-            throw "op>=5 cannot be used when mode=0"s;
+        if (d->op == 5 && d->mode == 0)
+            throw "op=5 cannot be used when mode=0"s;
 
         if (d->gmmax <= 0.0f)
             throw "gmmax must be greater than 0.0"s;
