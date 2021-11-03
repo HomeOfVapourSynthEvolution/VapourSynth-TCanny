@@ -5,7 +5,7 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
 
 
 ## Usage
-    tcanny.TCanny(vnode clip[, float[] sigma=1.5, float[] sigma_v=sigma, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=50.0, int opt=0, int[] planes=[0, 1, 2]])
+    tcanny.TCanny(vnode clip[, float[] sigma=1.5, float[] sigma_v=sigma, float t_h=8.0, float t_l=1.0, int mode=0, int op=1, float gmmax=1.0, int opt=0, int[] planes=[0, 1, 2]])
 
 - clip: Clip to process. Any format with either integer sample type of 8-16 bit depth or float sample type of 32 bit depth is supported.
 
@@ -29,7 +29,7 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
   - 3 = the Scharr operator
   - 4 = the Kroon operator
 
-- gmmax: Used for scaling gradient magnitude into [0, MAX_PIXEL_VALUE] for `mode=1`.
+- gmmax: Used for scaling gradient magnitude for `mode=1`.
 
 - opt: Sets which cpu optimizations to use.
   - 0 = auto detect

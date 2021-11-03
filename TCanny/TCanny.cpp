@@ -297,13 +297,13 @@ static void binarizeCE(const float* srcp, pixel_t* VS_RESTRICT dstp, const int w
 
 template<typename pixel_t>
 static void discretizeGM(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                         const float magnitude, const int peak) noexcept {
+                         const float gmmax, const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x++) {
             if constexpr (std::is_integral_v<pixel_t>)
-                dstp[x] = static_cast<pixel_t>(std::min(static_cast<int>(srcp[x] * magnitude + 0.5f), peak));
+                dstp[x] = static_cast<pixel_t>(std::min(static_cast<int>(srcp[x] * gmmax + 0.5f), peak));
             else
-                dstp[x] = srcp[x] * magnitude;
+                dstp[x] = srcp[x] * gmmax;
         }
 
         srcp += srcStride;
@@ -352,7 +352,7 @@ static void filter_c(const VSFrame* src, VSFrame* dst, const TCannyData* const V
             else if (d->mode == 0)
                 binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
             else
-                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->magnitude, d->peak);
+                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->gmmax, d->peak);
         }
     }
 }
@@ -482,9 +482,9 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
         if (err)
             d->op = 1;
 
-        auto gmmax{ vsapi->mapGetFloatSaturated(in, "gmmax", 0, &err) };
+        d->gmmax = vsapi->mapGetFloatSaturated(in, "gmmax", 0, &err);
         if (err)
-            gmmax = 50.0f;
+            d->gmmax = 1.0f;
 
         auto opt{ vsapi->mapGetIntSaturated(in, "opt", 0, &err) };
 
@@ -522,8 +522,8 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
         if (d->op < 0 || d->op > 4)
             throw "op must be 0, 1, 2, 3, or 4"s;
 
-        if (gmmax < 1.0f)
-            throw "gmmax must be greater than or equal to 1.0"s;
+        if (d->gmmax <= 0.0f)
+            throw "gmmax must be greater than 0.0"s;
 
         if (opt < 0 || opt > 4)
             throw "opt must be 0, 1, 2, 3, or 4"s;
@@ -627,8 +627,6 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
         }
 
         d->radiusAlign = (std::max({ d->radiusH[0], d->radiusH[1], d->radiusH[2], 1 }) + vectorSize - 1) & ~(vectorSize - 1);
-
-        d->magnitude = 255.0f / gmmax;
     } catch (const std::string& error) {
         vsapi->mapSetError(out, ("TCanny: " + error).c_str());
         vsapi->freeNode(d->node);

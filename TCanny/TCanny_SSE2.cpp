@@ -297,19 +297,19 @@ static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const
 
 template<typename pixel_t>
 static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                         const float magnitude, const int peak) noexcept {
+                         const float gmmax, const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec4f().size()) {
             auto& srcp{ Vec4f().load_a(_srcp + x) };
 
             if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                auto result{ compress_saturated_s2u(compress_saturated(truncatei(mul_add(srcp, magnitude, 0.5f)), zero_si128()), zero_si128()) };
+                auto result{ compress_saturated_s2u(compress_saturated(truncatei(mul_add(srcp, gmmax, 0.5f)), zero_si128()), zero_si128()) };
                 result.store_si32(dstp + x);
             } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                auto result{ compress_saturated_s2u(truncatei(mul_add(srcp, magnitude, 0.5f)), zero_si128()) };
+                auto result{ compress_saturated_s2u(truncatei(mul_add(srcp, gmmax, 0.5f)), zero_si128()) };
                 min(result, peak).storel(dstp + x);
             } else {
-                (srcp * magnitude).store_nt(dstp + x);
+                (srcp * gmmax).store_nt(dstp + x);
             }
         }
 
@@ -359,7 +359,7 @@ void filter_sse2(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_RE
             else if (d->mode == 0)
                 binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
             else
-                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->magnitude, d->peak);
+                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->gmmax, d->peak);
         }
     }
 }
