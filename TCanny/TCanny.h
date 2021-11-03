@@ -43,7 +43,6 @@ struct TCannyData final {
     int op;
     float gmmax;
     bool process[3];
-    float offset[3];
     int alignment;
     int peak;
     int radiusAlign;

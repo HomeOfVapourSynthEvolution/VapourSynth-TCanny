@@ -4,7 +4,7 @@
 template<typename pixel_t>
 static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const int width, const int height,
                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radiusH, const int radiusV,
-                         const float* weightsH, const float* weightsV, const float offset) noexcept {
+                         const float* weightsH, const float* weightsV) noexcept {
     auto diameter{ radiusV * 2 + 1 };
     auto _srcp{ std::make_unique<const pixel_t* []>(diameter) };
 
@@ -27,7 +27,7 @@ static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const 
                     sum = mul_add(srcp, weightsV[v], sum);
                 } else {
                     auto& srcp{ Vec16f().load_a(_srcp[v] + x) };
-                    sum = mul_add(srcp + offset, weightsV[v], sum);
+                    sum = mul_add(srcp, weightsV[v], sum);
                 }
             }
 
@@ -59,7 +59,7 @@ static void gaussianBlur(const pixel_t* __srcp, float* temp, float* dstp, const 
 
 template<typename pixel_t>
 static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const int width, const int height,
-                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights, const float offset) noexcept {
+                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights) noexcept {
     weights += radius;
 
     for (auto y{ 0 }; y < height; y++) {
@@ -69,7 +69,7 @@ static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const 
             else if constexpr (std::is_same_v<pixel_t, uint16_t>)
                 to_float(Vec16i().load_16us(_srcp + x)).store_a(temp + x);
             else
-                (Vec16f().load_a(_srcp + x) + offset).store_a(temp + x);
+                Vec16f().load_a(_srcp + x).store_a(temp + x);
         }
 
         for (auto i{ 1 }; i <= radius; i++) {
@@ -95,7 +95,7 @@ static void gaussianBlurH(const pixel_t* _srcp, float* temp, float* dstp, const 
 
 template<typename pixel_t>
 static void gaussianBlurV(const pixel_t* __srcp, float* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                          const int radius, const float* weights, const float offset) noexcept {
+                          const int radius, const float* weights) noexcept {
     auto diameter{ radius * 2 + 1 };
     auto _srcp{ std::make_unique<const pixel_t* []>(diameter) };
 
@@ -116,7 +116,7 @@ static void gaussianBlurV(const pixel_t* __srcp, float* dstp, const int width, c
                     sum = mul_add(srcp, weights[v], sum);
                 } else {
                     auto& srcp{ Vec16f().load_a(_srcp[v] + x) };
-                    sum = mul_add(srcp + offset, weights[v], sum);
+                    sum = mul_add(srcp, weights[v], sum);
                 }
             }
 
@@ -131,8 +131,7 @@ static void gaussianBlurV(const pixel_t* __srcp, float* dstp, const int width, c
 }
 
 template<typename pixel_t>
-static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                      const float offset) noexcept {
+static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec16f().size()) {
             if constexpr (std::is_same_v<pixel_t, uint8_t>)
@@ -140,7 +139,7 @@ static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const i
             else if constexpr (std::is_same_v<pixel_t, uint16_t>)
                 to_float(Vec16i().load_16us(srcp + x)).store_nt(dstp + x);
             else
-                (Vec16f().load_a(srcp + x) + offset).store_nt(dstp + x);
+                Vec16f().load_a(srcp + x).store_nt(dstp + x);
         }
 
         srcp += srcStride;
@@ -277,7 +276,7 @@ static void nonMaximumSuppression(const int* _direction, float* _gradient, float
 
 template<typename pixel_t>
 static void outputGB(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                     const int peak, const float offset) noexcept {
+                     const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec16f().size()) {
             auto& srcp{ Vec16f().load_a(_srcp + x) };
@@ -289,7 +288,7 @@ static void outputGB(const float* _srcp, pixel_t* dstp, const int width, const i
                 auto result{ compress_saturated_s2u(truncatei(srcp + 0.5f), zero_si512()).get_low() };
                 min(result, peak).store_nt(dstp + x);
             } else {
-                (srcp - offset).store_nt(dstp + x);
+                srcp.store_nt(dstp + x);
             }
         }
 
@@ -364,13 +363,13 @@ void filter_avx512(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_
 
             if (d->radiusH[plane] && d->radiusV[plane])
                 gaussianBlur(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->radiusV[plane],
-                             d->weightsH[plane].get(), d->weightsV[plane].get(), d->offset[plane]);
+                             d->weightsH[plane].get(), d->weightsV[plane].get());
             else if (d->radiusH[plane])
-                gaussianBlurH(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->weightsH[plane].get(), d->offset[plane]);
+                gaussianBlurH(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->weightsH[plane].get());
             else if (d->radiusV[plane])
-                gaussianBlurV(srcp, blur, width, height, stride, bgStride, d->radiusV[plane], d->weightsV[plane].get(), d->offset[plane]);
+                gaussianBlurV(srcp, blur, width, height, stride, bgStride, d->radiusV[plane], d->weightsV[plane].get());
             else
-                copyPlane(srcp, blur, width, height, stride, bgStride, d->offset[plane]);
+                copyPlane(srcp, blur, width, height, stride, bgStride);
 
             if (d->mode != -1) {
                 detectEdge(blur, gradient, direction, width, height, stride, bgStride, d->mode, d->op);
@@ -382,7 +381,7 @@ void filter_avx512(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_
             }
 
             if (d->mode == -1)
-                outputGB(blur, dstp, width, height, bgStride, stride, d->peak, d->offset[plane]);
+                outputGB(blur, dstp, width, height, bgStride, stride, d->peak);
             else if (d->mode == 0)
                 binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
             else

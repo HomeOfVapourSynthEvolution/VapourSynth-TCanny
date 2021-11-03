@@ -54,7 +54,7 @@ static auto gaussianWeights(const float sigma, int& radius) noexcept {
 template<typename pixel_t>
 static void gaussianBlur(const pixel_t* _srcp, float* VS_RESTRICT temp, float* VS_RESTRICT dstp, const int width, const int height,
                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radiusH, const int radiusV,
-                         const float* weightsH, const float* weightsV, const float offset) noexcept {
+                         const float* weightsH, const float* weightsV) noexcept {
     auto diameter{ radiusV * 2 + 1 };
     auto srcp{ std::make_unique<const pixel_t* []>(diameter) };
 
@@ -68,12 +68,8 @@ static void gaussianBlur(const pixel_t* _srcp, float* VS_RESTRICT temp, float* V
         for (auto x{ 0 }; x < width; x++) {
             auto sum{ 0.0f };
 
-            for (auto v{ 0 }; v < diameter; v++) {
-                if constexpr (std::is_integral_v<pixel_t>)
-                    sum += srcp[v][x] * weightsV[v];
-                else
-                    sum += (srcp[v][x] + offset) * weightsV[v];
-            }
+            for (auto v{ 0 }; v < diameter; v++)
+                sum += srcp[v][x] * weightsV[v];
 
             temp[x] = sum;
         }
@@ -101,16 +97,12 @@ static void gaussianBlur(const pixel_t* _srcp, float* VS_RESTRICT temp, float* V
 
 template<typename pixel_t>
 static void gaussianBlurH(const pixel_t* srcp, float* VS_RESTRICT temp, float* VS_RESTRICT dstp, const int width, const int height,
-                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights, const float offset) noexcept {
+                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights) noexcept {
     weights += radius;
 
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x++) {
-            if constexpr (std::is_integral_v<pixel_t>)
-                temp[x] = srcp[x];
-            else
-                temp[x] = srcp[x] + offset;
-        }
+        for (auto x{ 0 }; x < width; x++)
+            temp[x] = srcp[x];
 
         for (auto i{ 1 }; i <= radius; i++) {
             temp[-i] = temp[i];
@@ -133,7 +125,7 @@ static void gaussianBlurH(const pixel_t* srcp, float* VS_RESTRICT temp, float* V
 
 template<typename pixel_t>
 static void gaussianBlurV(const pixel_t* _srcp, float* VS_RESTRICT dstp, const int width, const int height,
-                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights, const float offset) noexcept {
+                          const ptrdiff_t srcStride, const ptrdiff_t dstStride, const int radius, const float* weights) noexcept {
     auto diameter{ radius * 2 + 1 };
     auto srcp{ std::make_unique<const pixel_t* []>(diameter) };
 
@@ -145,12 +137,8 @@ static void gaussianBlurV(const pixel_t* _srcp, float* VS_RESTRICT dstp, const i
         for (auto x{ 0 }; x < width; x++) {
             auto sum{ 0.0f };
 
-            for (auto v{ 0 }; v < diameter; v++) {
-                if constexpr (std::is_integral_v<pixel_t>)
-                    sum += srcp[v][x] * weights[v];
-                else
-                    sum += (srcp[v][x] + offset) * weights[v];
-            }
+            for (auto v{ 0 }; v < diameter; v++)
+                sum += srcp[v][x] * weights[v];
 
             dstp[x] = sum;
         }
@@ -163,15 +151,11 @@ static void gaussianBlurV(const pixel_t* _srcp, float* VS_RESTRICT dstp, const i
 }
 
 template<typename pixel_t>
-static void copyPlane(const pixel_t* srcp, float* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                      const float offset) noexcept {
+static void copyPlane(const pixel_t* srcp, float* VS_RESTRICT dstp, const int width, const int height,
+                      const ptrdiff_t srcStride, const ptrdiff_t dstStride) noexcept {
     for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x++) {
-            if constexpr (std::is_integral_v<pixel_t>)
-                dstp[x] = srcp[x];
-            else
-                dstp[x] = srcp[x] + offset;
-        }
+        for (auto x{ 0 }; x < width; x++)
+            dstp[x] = srcp[x];
 
         srcp += srcStride;
         dstp += dstStride;
@@ -292,13 +276,13 @@ static void nonMaximumSuppression(const int* direction, float* VS_RESTRICT gradi
 
 template<typename pixel_t>
 static void outputGB(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                     const int peak, const float offset) noexcept {
+                     const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x++) {
             if constexpr (std::is_integral_v<pixel_t>)
                 dstp[x] = static_cast<pixel_t>(std::min(static_cast<int>(srcp[x] + 0.5f), peak));
             else
-                dstp[x] = srcp[x] - offset;
+                dstp[x] = srcp[x];
         }
 
         srcp += srcStride;
@@ -357,13 +341,13 @@ static void filter_c(const VSFrame* src, VSFrame* dst, const TCannyData* const V
 
             if (d->radiusH[plane] && d->radiusV[plane])
                 gaussianBlur(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->radiusV[plane],
-                             d->weightsH[plane].get(), d->weightsV[plane].get(), d->offset[plane]);
+                             d->weightsH[plane].get(), d->weightsV[plane].get());
             else if (d->radiusH[plane])
-                gaussianBlurH(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->weightsH[plane].get(), d->offset[plane]);
+                gaussianBlurH(srcp, gradient, blur, width, height, stride, bgStride, d->radiusH[plane], d->weightsH[plane].get());
             else if (d->radiusV[plane])
-                gaussianBlurV(srcp, blur, width, height, stride, bgStride, d->radiusV[plane], d->weightsV[plane].get(), d->offset[plane]);
+                gaussianBlurV(srcp, blur, width, height, stride, bgStride, d->radiusV[plane], d->weightsV[plane].get());
             else
-                copyPlane(srcp, blur, width, height, stride, bgStride, d->offset[plane]);
+                copyPlane(srcp, blur, width, height, stride, bgStride);
 
             if (d->mode != -1) {
                 detectEdge(blur, gradient, direction, width, height, stride, bgStride, d->mode, d->op);
@@ -375,7 +359,7 @@ static void filter_c(const VSFrame* src, VSFrame* dst, const TCannyData* const V
             }
 
             if (d->mode == -1)
-                outputGB(blur, dstp, width, height, bgStride, stride, d->peak, d->offset[plane]);
+                outputGB(blur, dstp, width, height, bgStride, stride, d->peak);
             else if (d->mode == 0)
                 binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
             else
@@ -629,9 +613,6 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
         } else {
             d->t_h /= 255.0f;
             d->t_l /= 255.0f;
-
-            for (auto plane{ 0 }; plane < d->vi->format.numPlanes; plane++)
-                d->offset[plane] = (plane == 0 || d->vi->format.colorFamily == cfRGB) ? 0.0f : 0.5f;
         }
 
         for (auto plane{ 0 }; plane < d->vi->format.numPlanes; plane++) {
