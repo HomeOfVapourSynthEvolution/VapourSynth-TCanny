@@ -203,21 +203,27 @@ static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int
 
             float gx, gy;
 
-            if (op == 0) {
+            switch (op) {
+            case TRITICAL:
                 gx = right - left;
                 gy = top - bottom;
-            } else if (op == 1) {
+                break;
+            case PREWITT:
                 gx = (topRight + right + bottomRight - topLeft - left - bottomLeft) / 2.0f;
                 gy = (topLeft + top + topRight - bottomLeft - bottom - bottomRight) / 2.0f;
-            } else if (op == 2) {
+                break;
+            case SOBEL:
                 gx = topRight + 2.0f * right + bottomRight - topLeft - 2.0f * left - bottomLeft;
                 gy = topLeft + 2.0f * top + topRight - bottomLeft - 2.0f * bottom - bottomRight;
-            } else if (op == 3) {
+                break;
+            case SCHARR:
                 gx = 3.0f * topRight + 10.0f * right + 3.0f * bottomRight - 3.0f * topLeft - 10.0f * left - 3.0f * bottomLeft;
                 gy = 3.0f * topLeft + 10.0f * top + 3.0f * topRight - 3.0f * bottomLeft - 10.0f * bottom - 3.0f * bottomRight;
-            } else {
+                break;
+            case KROON:
                 gx = 17.0f * topRight + 61.0f * right + 17.0f * bottomRight - 17.0f * topLeft - 61.0f * left - 17.0f * bottomLeft;
                 gy = 17.0f * topLeft + 61.0f * top + 17.0f * topRight - 17.0f * bottomLeft - 61.0f * bottom - 17.0f * bottomRight;
+                break;
             }
 
             gradient[x] = std::sqrt(gx * gx + gy * gy);
@@ -480,7 +486,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
 
         d->op = vsapi->mapGetIntSaturated(in, "op", 0, &err);
         if (err)
-            d->op = 1;
+            d->op = PREWITT;
 
         d->gmmax = vsapi->mapGetFloatSaturated(in, "gmmax", 0, &err);
         if (err)

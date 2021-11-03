@@ -173,21 +173,27 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
 
             Vec4f gx, gy;
 
-            if (op == 0) {
+            switch (op) {
+            case TRITICAL:
                 gx = right - left;
                 gy = top - bottom;
-            } else if (op == 1) {
+                break;
+            case PREWITT:
                 gx = (topRight + right + bottomRight - topLeft - left - bottomLeft) * 0.5f;
                 gy = (topLeft + top + topRight - bottomLeft - bottom - bottomRight) * 0.5f;
-            } else if (op == 2) {
+                break;
+            case SOBEL:
                 gx = topRight + mul_add(2.0f, right, bottomRight) - topLeft - mul_add(2.0f, left, bottomLeft);
                 gy = topLeft + mul_add(2.0f, top, topRight) - bottomLeft - mul_add(2.0f, bottom, bottomRight);
-            } else if (op == 3) {
+                break;
+            case SCHARR:
                 gx = mul_add(3.0f, topRight, mul_add(10.0f, right, 3.0f * bottomRight)) - mul_add(3.0f, topLeft, mul_add(10.0f, left, 3.0f * bottomLeft));
                 gy = mul_add(3.0f, topLeft, mul_add(10.0f, top, 3.0f * topRight)) - mul_add(3.0f, bottomLeft, mul_add(10.0f, bottom, 3.0f * bottomRight));
-            } else {
+                break;
+            case KROON:
                 gx = mul_add(17.0f, topRight, mul_add(61.0f, right, 17.0f * bottomRight)) - mul_add(17.0f, topLeft, mul_add(61.0f, left, 17.0f * bottomLeft));
                 gy = mul_add(17.0f, topLeft, mul_add(61.0f, top, 17.0f * topRight)) - mul_add(17.0f, bottomLeft, mul_add(61.0f, bottom, 17.0f * bottomRight));
+                break;
             }
 
             sqrt(mul_add(gx, gx, gy * gy)).store_nt(gradient + x);

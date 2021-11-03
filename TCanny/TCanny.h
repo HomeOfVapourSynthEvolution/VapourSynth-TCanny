@@ -24,6 +24,14 @@ static constexpr float fltLowest = std::numeric_limits<float>::lowest();
 using unique_float = std::unique_ptr<float[], decltype(&vsh::vsh_aligned_free)>;
 using unique_int = std::unique_ptr<int[], decltype(&vsh::vsh_aligned_free)>;
 
+enum Operator {
+    TRITICAL,
+    PREWITT,
+    SOBEL,
+    SCHARR,
+    KROON
+};
+
 struct TCannyData final {
     VSNode* node;
     const VSVideoInfo* vi;
