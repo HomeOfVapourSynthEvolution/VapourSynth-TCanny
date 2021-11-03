@@ -187,12 +187,12 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
                 gy = topLeft + mul_add(2.0f, top, topRight) - bottomLeft - mul_add(2.0f, bottom, bottomRight);
                 break;
             case SCHARR:
-                gx = mul_add(3.0f, topRight, mul_add(10.0f, right, 3.0f * bottomRight)) - mul_add(3.0f, topLeft, mul_add(10.0f, left, 3.0f * bottomLeft));
-                gy = mul_add(3.0f, topLeft, mul_add(10.0f, top, 3.0f * topRight)) - mul_add(3.0f, bottomLeft, mul_add(10.0f, bottom, 3.0f * bottomRight));
+                gx = mul_add(3.0f, topRight + bottomRight, 10.0f * right) - mul_add(3.0f, topLeft + bottomLeft, 10.0f * left);
+                gy = mul_add(3.0f, topLeft + topRight, 10.0f * top) - mul_add(3.0f, bottomLeft + bottomRight, 10.0f * bottom);
                 break;
             case KROON:
-                gx = mul_add(17.0f, topRight, mul_add(61.0f, right, 17.0f * bottomRight)) - mul_add(17.0f, topLeft, mul_add(61.0f, left, 17.0f * bottomLeft));
-                gy = mul_add(17.0f, topLeft, mul_add(61.0f, top, 17.0f * topRight)) - mul_add(17.0f, bottomLeft, mul_add(61.0f, bottom, 17.0f * bottomRight));
+                gx = mul_add(17.0f, topRight + bottomRight, 61.0f * right) - mul_add(17.0f, topLeft + bottomLeft, 61.0f * left);
+                gy = mul_add(17.0f, topLeft + topRight, 61.0f * top) - mul_add(17.0f, bottomLeft + bottomRight, 61.0f * bottom);
                 break;
             case ROBINSON: {
                 auto g1{ topRight + mul_add(2.0f, right, bottomRight) - topLeft - mul_add(2.0f, left, bottomLeft) };
