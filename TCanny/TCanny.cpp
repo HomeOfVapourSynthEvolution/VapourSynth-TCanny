@@ -164,63 +164,109 @@ static void copyPlane(const pixel_t* srcp, float* VS_RESTRICT dstp, const int wi
 
 static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int* VS_RESTRICT direction, const int width, const int height,
                        const ptrdiff_t stride, const ptrdiff_t bgStride, const int mode, const int op, const float scale) noexcept {
-    auto prev{ blur + bgStride };
     auto cur{ blur };
     auto next{ blur + bgStride };
+    auto next2{ blur + bgStride * 2 };
+    auto prev{ next };
+    auto prev2{ next2 };
 
     cur[-1] = cur[1];
     cur[width] = cur[width - 2];
+    if (op == FDOG) {
+        cur[-2] = cur[2];
+        cur[width + 1] = cur[width - 3];
+    }
 
     for (auto y{ 0 }; y < height; y++) {
         next[-1] = next[1];
         next[width] = next[width - 2];
+        if (op == FDOG) {
+            next[-2] = next[2];
+            next[width + 1] = next[width - 3];
+
+            next2[-1] = next2[1];
+            next2[-2] = next2[2];
+            next2[width] = next2[width - 2];
+            next2[width + 1] = next2[width - 3];
+        }
 
         for (auto x{ 0 }; x < width; x++) {
-            auto topLeft{ prev[x - 1] };
-            auto top{ prev[x] };
-            auto topRight{ prev[x + 1] };
-            auto left{ cur[x - 1] };
-            auto right{ cur[x + 1] };
-            auto bottomLeft{ next[x - 1] };
-            auto bottom{ next[x] };
-            auto bottomRight{ next[x + 1] };
+            float gx{}, gy{};
 
-            float gx, gy;
+            if (op != FDOG) {
+                auto c1{ prev[x - 1] };
+                auto c2{ prev[x] };
+                auto c3{ prev[x + 1] };
+                auto c4{ cur[x - 1] };
+                auto c6{ cur[x + 1] };
+                auto c7{ next[x - 1] };
+                auto c8{ next[x] };
+                auto c9{ next[x + 1] };
 
-            switch (op) {
-            case TRITICAL:
-                gx = right - left;
-                gy = top - bottom;
-                break;
-            case PREWITT:
-                gx = (topRight + right + bottomRight - topLeft - left - bottomLeft) / 2.0f;
-                gy = (topLeft + top + topRight - bottomLeft - bottom - bottomRight) / 2.0f;
-                break;
-            case SOBEL:
-                gx = topRight + 2.0f * right + bottomRight - topLeft - 2.0f * left - bottomLeft;
-                gy = topLeft + 2.0f * top + topRight - bottomLeft - 2.0f * bottom - bottomRight;
-                break;
-            case SCHARR:
-                gx = 3.0f * topRight + 10.0f * right + 3.0f * bottomRight - 3.0f * topLeft - 10.0f * left - 3.0f * bottomLeft;
-                gy = 3.0f * topLeft + 10.0f * top + 3.0f * topRight - 3.0f * bottomLeft - 10.0f * bottom - 3.0f * bottomRight;
-                break;
-            case KROON:
-                gx = 17.0f * topRight + 61.0f * right + 17.0f * bottomRight - 17.0f * topLeft - 61.0f * left - 17.0f * bottomLeft;
-                gy = 17.0f * topLeft + 61.0f * top + 17.0f * topRight - 17.0f * bottomLeft - 61.0f * bottom - 17.0f * bottomRight;
-                break;
-            case KIRSCH: {
-                auto g1{ 5.0f * topLeft + 5.0f * top + 5.0f * topRight - 3.0f * left - 3.0f * right - 3.0f * bottomLeft - 3.0f * bottom - 3.0f * bottomRight };
-                auto g2{ 5.0f * topLeft + 5.0f * top - 3.0f * topRight + 5.0f * left - 3.0f * right - 3.0f * bottomLeft - 3.0f * bottom - 3.0f * bottomRight };
-                auto g3{ 5.0f * topLeft - 3.0f * top - 3.0f * topRight + 5.0f * left - 3.0f * right + 5.0f * bottomLeft - 3.0f * bottom - 3.0f * bottomRight };
-                auto g4{ -3.0f * topLeft - 3.0f * top - 3.0f * topRight + 5.0f * left - 3.0f * right + 5.0f * bottomLeft + 5.0f * bottom - 3.0f * bottomRight };
-                auto g5{ -3.0f * topLeft - 3.0f * top - 3.0f * topRight - 3.0f * left - 3.0f * right + 5.0f * bottomLeft + 5.0f * bottom + 5.0f * bottomRight };
-                auto g6{ -3.0f * topLeft - 3.0f * top - 3.0f * topRight - 3.0f * left + 5.0f * right - 3.0f * bottomLeft + 5.0f * bottom + 5.0f * bottomRight };
-                auto g7{ -3.0f * topLeft - 3.0f * top + 5.0f * topRight - 3.0f * left + 5.0f * right - 3.0f * bottomLeft - 3.0f * bottom + 5.0f * bottomRight };
-                auto g8{ -3.0f * topLeft + 5.0f * top + 5.0f * topRight - 3.0f * left + 5.0f * right - 3.0f * bottomLeft - 3.0f * bottom - 3.0f * bottomRight };
-                auto g{ std::max({ std::abs(g1), std::abs(g2), std::abs(g3), std::abs(g4), std::abs(g5), std::abs(g6), std::abs(g7), std::abs(g8) }) };
-                gradient[x] = g * scale;
-                break;
-            }
+                switch (op) {
+                case TRITICAL:
+                    gx = c6 - c4;
+                    gy = c2 - c8;
+                    break;
+                case PREWITT:
+                    gx = (c3 + c6 + c9 - c1 - c4 - c7) / 2.0f;
+                    gy = (c1 + c2 + c3 - c7 - c8 - c9) / 2.0f;
+                    break;
+                case SOBEL:
+                    gx = c3 + 2.0f * c6 + c9 - c1 - 2.0f * c4 - c7;
+                    gy = c1 + 2.0f * c2 + c3 - c7 - 2.0f * c8 - c9;
+                    break;
+                case SCHARR:
+                    gx = 3.0f * c3 + 10.0f * c6 + 3.0f * c9 - 3.0f * c1 - 10.0f * c4 - 3.0f * c7;
+                    gy = 3.0f * c1 + 10.0f * c2 + 3.0f * c3 - 3.0f * c7 - 10.0f * c8 - 3.0f * c9;
+                    break;
+                case KROON:
+                    gx = 17.0f * c3 + 61.0f * c6 + 17.0f * c9 - 17.0f * c1 - 61.0f * c4 - 17.0f * c7;
+                    gy = 17.0f * c1 + 61.0f * c2 + 17.0f * c3 - 17.0f * c7 - 61.0f * c8 - 17.0f * c9;
+                    break;
+                case KIRSCH:
+                    auto g1{ 5.0f * c1 + 5.0f * c2 + 5.0f * c3 - 3.0f * c4 - 3.0f * c6 - 3.0f * c7 - 3.0f * c8 - 3.0f * c9 };
+                    auto g2{ 5.0f * c1 + 5.0f * c2 - 3.0f * c3 + 5.0f * c4 - 3.0f * c6 - 3.0f * c7 - 3.0f * c8 - 3.0f * c9 };
+                    auto g3{ 5.0f * c1 - 3.0f * c2 - 3.0f * c3 + 5.0f * c4 - 3.0f * c6 + 5.0f * c7 - 3.0f * c8 - 3.0f * c9 };
+                    auto g4{ -3.0f * c1 - 3.0f * c2 - 3.0f * c3 + 5.0f * c4 - 3.0f * c6 + 5.0f * c7 + 5.0f * c8 - 3.0f * c9 };
+                    auto g5{ -3.0f * c1 - 3.0f * c2 - 3.0f * c3 - 3.0f * c4 - 3.0f * c6 + 5.0f * c7 + 5.0f * c8 + 5.0f * c9 };
+                    auto g6{ -3.0f * c1 - 3.0f * c2 - 3.0f * c3 - 3.0f * c4 + 5.0f * c6 - 3.0f * c7 + 5.0f * c8 + 5.0f * c9 };
+                    auto g7{ -3.0f * c1 - 3.0f * c2 + 5.0f * c3 - 3.0f * c4 + 5.0f * c6 - 3.0f * c7 - 3.0f * c8 + 5.0f * c9 };
+                    auto g8{ -3.0f * c1 + 5.0f * c2 + 5.0f * c3 - 3.0f * c4 + 5.0f * c6 - 3.0f * c7 - 3.0f * c8 - 3.0f * c9 };
+                    auto g{ std::max({ std::abs(g1), std::abs(g2), std::abs(g3), std::abs(g4), std::abs(g5), std::abs(g6), std::abs(g7), std::abs(g8) }) };
+                    gradient[x] = g * scale;
+                    break;
+                }
+            } else {
+                auto c1{ prev2[x - 2] };
+                auto c2{ prev2[x - 1] };
+                auto c3{ prev2[x] };
+                auto c4{ prev2[x + 1] };
+                auto c5{ prev2[x + 2] };
+                auto c6{ prev[x - 2] };
+                auto c7{ prev[x - 1] };
+                auto c8{ prev[x] };
+                auto c9{ prev[x + 1] };
+                auto c10{ prev[x + 2] };
+                auto c11{ cur[x - 2] };
+                auto c12{ cur[x - 1] };
+                auto c14{ cur[x + 1] };
+                auto c15{ cur[x + 2] };
+                auto c16{ next[x - 2] };
+                auto c17{ next[x - 1] };
+                auto c18{ next[x] };
+                auto c19{ next[x + 1] };
+                auto c20{ next[x + 2] };
+                auto c21{ next2[x - 2] };
+                auto c22{ next2[x - 1] };
+                auto c23{ next2[x] };
+                auto c24{ next2[x + 1] };
+                auto c25{ next2[x + 2] };
+
+                gx = c5 + 2.0f * c10 + 3.0f * c15 + 2.0f * c20 + c25 + c4 + 2.0f * c9 + 3.0f * c14 + 2.0f * c19 + c24
+                    - c2 - 2.0f * c7 - 3.0f * c12 - 2.0f * c17 - c22 - c1 - 2.0f * c6 - 3.0f * c11 - 2.0f * c16 - c21;
+                gy = c1 + 2.0f * c2 + 3.0f * c3 + 2.0f * c4 + c5 + c6 + 2.0f * c7 + 3.0f * c8 + 2.0f * c9 + c10
+                    - c16 - 2.0f * c17 - 3.0f * c18 - 2.0f * c19 - c20 - c21 - 2.0f * c22 - 3.0f * c23 - 2.0f * c24 - c25;
             }
 
             if (op != KIRSCH) {
@@ -239,9 +285,15 @@ static void detectEdge(float* VS_RESTRICT blur, float* VS_RESTRICT gradient, int
             }
         }
 
+        prev2 = prev;
         prev = cur;
         cur = next;
-        next += (y < height - 2) ? bgStride : -bgStride;
+        if (op != FDOG) {
+            next += (y < height - 2) ? bgStride : -bgStride;
+        } else {
+            next = next2;
+            next2 += (y < height - 3) ? bgStride : -bgStride;
+        }
         gradient += bgStride;
         direction += stride;
     }
@@ -422,8 +474,8 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
             (d->vi->format.sampleType == stFloat && d->vi->format.bitsPerSample != 32))
             throw "only constant format 8-16 bit integer and 32 bit float input supported"s;
 
-        if (d->vi->height < 2)
-            throw "clip's height must be at least 2"s;
+        if (d->vi->height < 3)
+            throw "clip's height must be at least 3"s;
 
         const auto numSigmaH{ vsapi->mapNumElements(in, "sigma") };
         if (numSigmaH > d->vi->format.numPlanes)
@@ -508,8 +560,8 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
         if (d->mode < -1 || d->mode > 1)
             throw "mode must be -1, 0, or 1"s;
 
-        if (d->op < 0 || d->op > 5)
-            throw "op must be 0, 1, 2, 3, 4, or 5"s;
+        if (d->op < 0 || d->op > 6)
+            throw "op must be 0, 1, 2, 3, 4, 5, or 6"s;
 
         if (d->op == 5 && d->mode == 0)
             throw "op=5 cannot be used when mode=0"s;
@@ -615,7 +667,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
             }
         }
 
-        d->radiusAlign = (std::max({ d->radiusH[0], d->radiusH[1], d->radiusH[2], 1 }) + vectorSize - 1) & ~(vectorSize - 1);
+        d->radiusAlign = (std::max({ d->radiusH[0], d->radiusH[1], d->radiusH[2], d->op == FDOG ? 2 : 1 }) + vectorSize - 1) & ~(vectorSize - 1);
     } catch (const std::string& error) {
         vsapi->mapSetError(out, ("TCanny: " + error).c_str());
         vsapi->freeNode(d->node);

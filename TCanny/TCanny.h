@@ -30,7 +30,8 @@ enum Operator {
     SOBEL,
     SCHARR,
     KROON,
-    KIRSCH
+    KIRSCH,
+    FDOG
 };
 
 struct TCannyData final {

@@ -149,63 +149,109 @@ static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const i
 
 static void detectEdge(float* blur, float* gradient, int* direction, const int width, const int height, const ptrdiff_t stride, const ptrdiff_t bgStride,
                        const int mode, const int op, const float scale) noexcept {
-    auto prev{ blur + bgStride };
     auto cur{ blur };
     auto next{ blur + bgStride };
+    auto next2{ blur + bgStride * 2 };
+    auto prev{ next };
+    auto prev2{ next2 };
 
     cur[-1] = cur[1];
     cur[width] = cur[width - 2];
+    if (op == FDOG) {
+        cur[-2] = cur[2];
+        cur[width + 1] = cur[width - 3];
+    }
 
     for (auto y{ 0 }; y < height; y++) {
         next[-1] = next[1];
         next[width] = next[width - 2];
+        if (op == FDOG) {
+            next[-2] = next[2];
+            next[width + 1] = next[width - 3];
+
+            next2[-1] = next2[1];
+            next2[-2] = next2[2];
+            next2[width] = next2[width - 2];
+            next2[width + 1] = next2[width - 3];
+        }
 
         for (auto x{ 0 }; x < width; x += Vec4f().size()) {
-            auto& topLeft{ Vec4f().load(prev + x - 1) };
-            auto& top{ Vec4f().load_a(prev + x) };
-            auto& topRight{ Vec4f().load(prev + x + 1) };
-            auto& left{ Vec4f().load(cur + x - 1) };
-            auto& right{ Vec4f().load(cur + x + 1) };
-            auto& bottomLeft{ Vec4f().load(next + x - 1) };
-            auto& bottom{ Vec4f().load_a(next + x) };
-            auto& bottomRight{ Vec4f().load(next + x + 1) };
-
             Vec4f gx, gy;
 
-            switch (op) {
-            case TRITICAL:
-                gx = right - left;
-                gy = top - bottom;
-                break;
-            case PREWITT:
-                gx = (topRight + right + bottomRight - topLeft - left - bottomLeft) * 0.5f;
-                gy = (topLeft + top + topRight - bottomLeft - bottom - bottomRight) * 0.5f;
-                break;
-            case SOBEL:
-                gx = topRight + mul_add(2.0f, right, bottomRight) - topLeft - mul_add(2.0f, left, bottomLeft);
-                gy = topLeft + mul_add(2.0f, top, topRight) - bottomLeft - mul_add(2.0f, bottom, bottomRight);
-                break;
-            case SCHARR:
-                gx = mul_add(3.0f, topRight + bottomRight, 10.0f * right) - mul_add(3.0f, topLeft + bottomLeft, 10.0f * left);
-                gy = mul_add(3.0f, topLeft + topRight, 10.0f * top) - mul_add(3.0f, bottomLeft + bottomRight, 10.0f * bottom);
-                break;
-            case KROON:
-                gx = mul_add(17.0f, topRight + bottomRight, 61.0f * right) - mul_add(17.0f, topLeft + bottomLeft, 61.0f * left);
-                gy = mul_add(17.0f, topLeft + topRight, 61.0f * top) - mul_add(17.0f, bottomLeft + bottomRight, 61.0f * bottom);
-                break;
-            case KIRSCH: {
-                auto g1{ mul_sub(5.0f, topLeft + top + topRight, 3.0f * (left + right + bottomLeft + bottom + bottomRight)) };
-                auto g2{ mul_sub(5.0f, topLeft + top + left, 3.0f * (topRight + right + bottomLeft + bottom + bottomRight)) };
-                auto g3{ mul_sub(5.0f, topLeft + left + bottomLeft, 3.0f * (top + topRight + right + bottom + bottomRight)) };
-                auto g4{ mul_sub(5.0f, left + bottomLeft + bottom, 3.0f * (topLeft + top + topRight + right + bottomRight)) };
-                auto g5{ mul_sub(5.0f, bottomLeft + bottom + bottomRight, 3.0f * (topLeft + top + topRight + left + right)) };
-                auto g6{ mul_sub(5.0f, right + bottom + bottomRight, 3.0f * (topLeft + top + topRight + left + bottomLeft)) };
-                auto g7{ mul_sub(5.0f, topRight + right + bottomRight, 3.0f * (topLeft + top + left + bottomLeft + bottom)) };
-                auto g8{ mul_sub(5.0f, top + topRight + right, 3.0f * (topLeft + left + bottomLeft + bottom + bottomRight)) };
-                auto g{ max(max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))), max(max(abs(g5), abs(g6)), max(abs(g7), abs(g8)))) };
-                (g * scale).store_nt(gradient + x);
-                break;
-            }
+            if (op != FDOG) {
+                auto& c1{ Vec4f().load(prev + x - 1) };
+                auto& c2{ Vec4f().load_a(prev + x) };
+                auto& c3{ Vec4f().load(prev + x + 1) };
+                auto& c4{ Vec4f().load(cur + x - 1) };
+                auto& c6{ Vec4f().load(cur + x + 1) };
+                auto& c7{ Vec4f().load(next + x - 1) };
+                auto& c8{ Vec4f().load_a(next + x) };
+                auto& c9{ Vec4f().load(next + x + 1) };
+
+                switch (op) {
+                case TRITICAL:
+                    gx = c6 - c4;
+                    gy = c2 - c8;
+                    break;
+                case PREWITT:
+                    gx = (c3 + c6 + c9 - c1 - c4 - c7) * 0.5f;
+                    gy = (c1 + c2 + c3 - c7 - c8 - c9) * 0.5f;
+                    break;
+                case SOBEL:
+                    gx = c3 + mul_add(2.0f, c6, c9) - c1 - mul_add(2.0f, c4, c7);
+                    gy = c1 + mul_add(2.0f, c2, c3) - c7 - mul_add(2.0f, c8, c9);
+                    break;
+                case SCHARR:
+                    gx = mul_add(3.0f, c3 + c9, 10.0f * c6) - mul_add(3.0f, c1 + c7, 10.0f * c4);
+                    gy = mul_add(3.0f, c1 + c3, 10.0f * c2) - mul_add(3.0f, c7 + c9, 10.0f * c8);
+                    break;
+                case KROON:
+                    gx = mul_add(17.0f, c3 + c9, 61.0f * c6) - mul_add(17.0f, c1 + c7, 61.0f * c4);
+                    gy = mul_add(17.0f, c1 + c3, 61.0f * c2) - mul_add(17.0f, c7 + c9, 61.0f * c8);
+                    break;
+                case KIRSCH:
+                    auto g1{ mul_sub(5.0f, c1 + c2 + c3, 3.0f * (c4 + c6 + c7 + c8 + c9)) };
+                    auto g2{ mul_sub(5.0f, c1 + c2 + c4, 3.0f * (c3 + c6 + c7 + c8 + c9)) };
+                    auto g3{ mul_sub(5.0f, c1 + c4 + c7, 3.0f * (c2 + c3 + c6 + c8 + c9)) };
+                    auto g4{ mul_sub(5.0f, c4 + c7 + c8, 3.0f * (c1 + c2 + c3 + c6 + c9)) };
+                    auto g5{ mul_sub(5.0f, c7 + c8 + c9, 3.0f * (c1 + c2 + c3 + c4 + c6)) };
+                    auto g6{ mul_sub(5.0f, c6 + c8 + c9, 3.0f * (c1 + c2 + c3 + c4 + c7)) };
+                    auto g7{ mul_sub(5.0f, c3 + c6 + c9, 3.0f * (c1 + c2 + c4 + c7 + c8)) };
+                    auto g8{ mul_sub(5.0f, c2 + c3 + c6, 3.0f * (c1 + c4 + c7 + c8 + c9)) };
+                    auto g{ max(max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))), max(max(abs(g5), abs(g6)), max(abs(g7), abs(g8)))) };
+                    (g * scale).store_nt(gradient + x);
+                    break;
+                }
+            } else {
+                auto& c1{ Vec4f().load(prev2 + x - 2) };
+                auto& c2{ Vec4f().load(prev2 + x - 1) };
+                auto& c3{ Vec4f().load(prev2 + x) };
+                auto& c4{ Vec4f().load(prev2 + x + 1) };
+                auto& c5{ Vec4f().load(prev2 + x + 2) };
+                auto& c6{ Vec4f().load(prev + x - 2) };
+                auto& c7{ Vec4f().load(prev + x - 1) };
+                auto& c8{ Vec4f().load(prev + x) };
+                auto& c9{ Vec4f().load(prev + x + 1) };
+                auto& c10{ Vec4f().load(prev + x + 2) };
+                auto& c11{ Vec4f().load(cur + x - 2) };
+                auto& c12{ Vec4f().load(cur + x - 1) };
+                auto& c14{ Vec4f().load(cur + x + 1) };
+                auto& c15{ Vec4f().load(cur + x + 2) };
+                auto& c16{ Vec4f().load(next + x - 2) };
+                auto& c17{ Vec4f().load(next + x - 1) };
+                auto& c18{ Vec4f().load(next + x) };
+                auto& c19{ Vec4f().load(next + x + 1) };
+                auto& c20{ Vec4f().load(next + x + 2) };
+                auto& c21{ Vec4f().load(next2 + x - 2) };
+                auto& c22{ Vec4f().load(next2 + x - 1) };
+                auto& c23{ Vec4f().load(next2 + x) };
+                auto& c24{ Vec4f().load(next2 + x + 1) };
+                auto& c25{ Vec4f().load(next2 + x + 2) };
+
+                gx = c5 + c25 + c4 + c24 + mul_add(2.0f, c10 + c20 + c9 + c19, 3.0f * (c15 + c14))
+                    - c2 - c22 - c1 - c21 - mul_add(2.0f, c7 + c17 + c6 + c16, 3.0f * (c12 + c11));
+                gy = c1 + c5 + c6 + c10 + mul_add(2.0f, c2 + c4 + c7 + c9, 3.0f * (c3 + c8))
+                    - c16 - c20 - c21 - c25 - mul_add(2.0f, c17 + c19 + c22 + c24, 3.0f * (c18 + c23));
             }
 
             if (op != KIRSCH) {
@@ -223,9 +269,15 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
             }
         }
 
+        prev2 = prev;
         prev = cur;
         cur = next;
-        next += (y < height - 2) ? bgStride : -bgStride;
+        if (op != FDOG) {
+            next += (y < height - 2) ? bgStride : -bgStride;
+        } else {
+            next = next2;
+            next2 += (y < height - 3) ? bgStride : -bgStride;
+        }
         gradient += bgStride;
         direction += stride;
     }

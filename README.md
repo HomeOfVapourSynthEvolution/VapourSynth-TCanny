@@ -29,6 +29,7 @@ Ported from AviSynth plugin http://bengal.missouri.edu/~kes25c/
   - 3 = the Scharr operator
   - 4 = the Kroon operator
   - 5 = the Kirsch operator
+  - 6 = the FDoG operator
 
 - scale: Multiplies the gradient by `scale`. This can be used to increase or decrease the intensity of edges in the output.
 
