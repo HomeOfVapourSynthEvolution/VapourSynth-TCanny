@@ -40,7 +40,7 @@ struct TCannyData final {
     float t_l;
     int mode;
     int op;
-    float gmmax;
+    float scale;
     bool process[3];
     int alignment;
     int peak;

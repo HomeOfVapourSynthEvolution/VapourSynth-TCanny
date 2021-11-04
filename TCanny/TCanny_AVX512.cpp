@@ -148,7 +148,7 @@ static void copyPlane(const pixel_t* srcp, float* dstp, const int width, const i
 }
 
 static void detectEdge(float* blur, float* gradient, int* direction, const int width, const int height, const ptrdiff_t stride, const ptrdiff_t bgStride,
-                       const int mode, const int op) noexcept {
+                       const int mode, const int op, const float scale) noexcept {
     auto prev{ blur + bgStride };
     auto cur{ blur };
     auto next{ blur + bgStride };
@@ -202,13 +202,17 @@ static void detectEdge(float* blur, float* gradient, int* direction, const int w
                 auto g6{ mul_sub(5.0f, right + bottom + bottomRight, 3.0f * (topLeft + top + topRight + left + bottomLeft)) };
                 auto g7{ mul_sub(5.0f, topRight + right + bottomRight, 3.0f * (topLeft + top + left + bottomLeft + bottom)) };
                 auto g8{ mul_sub(5.0f, top + topRight + right, 3.0f * (topLeft + left + bottomLeft + bottom + bottomRight)) };
-                max(max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))), max(max(abs(g5), abs(g6)), max(abs(g7), abs(g8)))).store_nt(gradient + x);
+                auto g{ max(max(max(abs(g1), abs(g2)), max(abs(g3), abs(g4))), max(max(abs(g5), abs(g6)), max(abs(g7), abs(g8)))) };
+                (g * scale).store_nt(gradient + x);
                 break;
             }
             }
 
-            if (op != KIRSCH)
+            if (op != KIRSCH) {
+                gx *= scale;
+                gy *= scale;
                 sqrt(mul_add(gx, gx, gy * gy)).store_nt(gradient + x);
+            }
 
             if (mode == 0) {
                 auto dr{ atan2(gy, gx) };
@@ -267,29 +271,6 @@ static void nonMaximumSuppression(const int* _direction, float* _gradient, float
 }
 
 template<typename pixel_t>
-static void outputGB(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                     const int peak) noexcept {
-    for (auto y{ 0 }; y < height; y++) {
-        for (auto x{ 0 }; x < width; x += Vec16f().size()) {
-            auto& srcp{ Vec16f().load_a(_srcp + x) };
-
-            if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                auto result{ compress_saturated_s2u(compress_saturated(truncatei(srcp + 0.5f), zero_si512()), zero_si512()).get_low().get_low() };
-                result.store_nt(dstp + x);
-            } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                auto result{ compress_saturated_s2u(truncatei(srcp + 0.5f), zero_si512()).get_low() };
-                min(result, peak).store_nt(dstp + x);
-            } else {
-                srcp.store_nt(dstp + x);
-            }
-        }
-
-        _srcp += srcStride;
-        dstp += dstStride;
-    }
-}
-
-template<typename pixel_t>
 static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                        const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
@@ -315,19 +296,19 @@ static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const
 
 template<typename pixel_t>
 static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
-                         const float gmmax, const int peak) noexcept {
+                         const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x += Vec16f().size()) {
             auto& srcp{ Vec16f().load_a(_srcp + x) };
 
             if constexpr (std::is_same_v<pixel_t, uint8_t>) {
-                auto result{ compress_saturated_s2u(compress_saturated(truncatei(mul_add(srcp, gmmax, 0.5f)), zero_si512()), zero_si512()).get_low().get_low() };
+                auto result{ compress_saturated_s2u(compress_saturated(truncatei(srcp + 0.5f), zero_si512()), zero_si512()).get_low().get_low() };
                 result.store_nt(dstp + x);
             } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
-                auto result{ compress_saturated_s2u(truncatei(mul_add(srcp, gmmax, 0.5f)), zero_si512()).get_low() };
+                auto result{ compress_saturated_s2u(truncatei(srcp + 0.5f), zero_si512()).get_low() };
                 min(result, peak).store_nt(dstp + x);
             } else {
-                (srcp * gmmax).store_nt(dstp + x);
+                srcp.store_nt(dstp + x);
             }
         }
 
@@ -364,7 +345,7 @@ void filter_avx512(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_
                 copyPlane(srcp, blur, width, height, stride, bgStride);
 
             if (d->mode != -1) {
-                detectEdge(blur, gradient, direction, width, height, stride, bgStride, d->mode, d->op);
+                detectEdge(blur, gradient, direction, width, height, stride, bgStride, d->mode, d->op, d->scale);
 
                 if (d->mode == 0) {
                     nonMaximumSuppression(direction, gradient, blur, width, height, stride, bgStride, d->radiusAlign);
@@ -372,12 +353,10 @@ void filter_avx512(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_
                 }
             }
 
-            if (d->mode == -1)
-                outputGB(blur, dstp, width, height, bgStride, stride, d->peak);
-            else if (d->mode == 0)
+            if (d->mode == 0)
                 binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
             else
-                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->gmmax, d->peak);
+                discretizeGM(d->mode == 1 ? gradient : blur, dstp, width, height, bgStride, stride, d->peak);
         }
     }
 }
