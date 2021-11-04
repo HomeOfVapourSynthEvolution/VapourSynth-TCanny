@@ -683,7 +683,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
 // Init
 
 VS_EXTERNAL_API(void) VapourSynthPluginInit2(VSPlugin* plugin, const VSPLUGINAPI* vspapi) {
-    vspapi->configPlugin("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VS_MAKE_VERSION(12, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
+    vspapi->configPlugin("com.holywu.tcanny", "tcanny", "Build an edge map using canny edge detection", VS_MAKE_VERSION(13, 0), VAPOURSYNTH_API_VERSION, 0, plugin);
     vspapi->registerFunction("TCanny",
                              "clip:vnode;"
                              "sigma:float[]:opt;"
