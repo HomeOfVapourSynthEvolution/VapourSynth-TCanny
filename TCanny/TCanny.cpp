@@ -338,13 +338,15 @@ static void binarizeCE(const float* srcp, pixel_t* VS_RESTRICT dstp, const int w
     }
 }
 
-template<typename pixel_t>
+template<typename pixel_t, bool clampFP = true>
 static void discretizeGM(const float* srcp, pixel_t* VS_RESTRICT dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                          const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
         for (auto x{ 0 }; x < width; x++) {
             if constexpr (std::is_integral_v<pixel_t>)
                 dstp[x] = static_cast<pixel_t>(std::min(static_cast<int>(srcp[x] + 0.5f), peak));
+            else if constexpr (clampFP)
+                dstp[x] = std::clamp(srcp[x], 0.0f, 1.0f);
             else
                 dstp[x] = srcp[x];
         }
@@ -392,8 +394,10 @@ static void filter_c(const VSFrame* src, VSFrame* dst, const TCannyData* const V
 
             if (d->mode == 0)
                 binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
+            else if (d->mode == 1)
+                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->peak);
             else
-                discretizeGM(d->mode == 1 ? gradient : blur, dstp, width, height, bgStride, stride, d->peak);
+                discretizeGM<pixel_t, false>(blur, dstp, width, height, bgStride, stride, d->peak);
         }
     }
 }

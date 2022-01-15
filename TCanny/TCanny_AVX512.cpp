@@ -346,7 +346,7 @@ static void binarizeCE(const float* _srcp, pixel_t* dstp, const int width, const
     }
 }
 
-template<typename pixel_t>
+template<typename pixel_t, bool clampFP = true>
 static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, const int height, const ptrdiff_t srcStride, const ptrdiff_t dstStride,
                          const int peak) noexcept {
     for (auto y{ 0 }; y < height; y++) {
@@ -359,6 +359,8 @@ static void discretizeGM(const float* _srcp, pixel_t* dstp, const int width, con
             } else if constexpr (std::is_same_v<pixel_t, uint16_t>) {
                 auto result{ compress_saturated_s2u(truncatei(srcp + 0.5f), zero_si512()).get_low() };
                 min(result, peak).store_nt(dstp + x);
+            } else if constexpr (clampFP) {
+                min(max(srcp, 0.0f), 1.0f).store_nt(dstp + x);
             } else {
                 srcp.store_nt(dstp + x);
             }
@@ -407,8 +409,10 @@ void filter_avx512(const VSFrame* src, VSFrame* dst, const TCannyData* const VS_
 
             if (d->mode == 0)
                 binarizeCE(blur, dstp, width, height, bgStride, stride, d->peak);
+            else if (d->mode == 1)
+                discretizeGM(gradient, dstp, width, height, bgStride, stride, d->peak);
             else
-                discretizeGM(d->mode == 1 ? gradient : blur, dstp, width, height, bgStride, stride, d->peak);
+                discretizeGM<pixel_t, false>(blur, dstp, width, height, bgStride, stride, d->peak);
         }
     }
 }
