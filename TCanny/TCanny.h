@@ -43,11 +43,11 @@ struct TCannyData final {
     int op;
     float scale;
     bool process[3];
-    int alignment;
     int peak;
     int radiusAlign;
     int radiusH[3];
     int radiusV[3];
+    size_t alignment;
     std::unique_ptr<float[]> weightsH[3];
     std::unique_ptr<float[]> weightsV[3];
     std::unordered_map<std::thread::id, std::unique_ptr<bool[]>> found;

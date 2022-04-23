@@ -20,6 +20,7 @@
 */
 
 #include <cmath>
+#include <cstddef>
 
 #include <string>
 
@@ -578,7 +579,7 @@ static void VS_CC tcannyCreate(const VSMap* in, VSMap* out, [[maybe_unused]] voi
 
         auto vectorSize{ 1 };
         {
-            d->alignment = 4;
+            d->alignment = alignof(std::max_align_t);
 
 #ifdef TCANNY_X86
             const auto iset{ instrset_detect() };
